@@ -420,7 +420,10 @@ class SafetyCoordinator:
         if rule.is_unsafe:
             return  # Already unsafe
 
-        if rule.unsafe_delay > 0 and rule._unsafe_delay_cancel is None:
+        if rule.unsafe_delay > 0:
+            if rule._unsafe_delay_cancel is not None:
+                return  # Delay already running — keep waiting, don't restart or skip it
+
             # Start the unsafe delay timer
             @callback
             def _delay_done(_now: Any) -> None:
@@ -478,6 +481,13 @@ class SafetyCoordinator:
 
     # --- Group Evaluation ---
 
+    @staticmethod
+    def _rules_unsafe(group: GroupState) -> bool:
+        """Return True if the group's rules are unsafe according to its logic."""
+        if group.logic == LOGIC_OR:
+            return any(r.is_unsafe for r in group.rules)
+        return all(r.is_unsafe for r in group.rules)  # AND
+
     def _evaluate_group(self, group: GroupState) -> None:
         """Evaluate whether a group is UNSAFE based on its logic type."""
         if not group.rules:
@@ -498,17 +508,20 @@ class SafetyCoordinator:
             group.boot_guard_complete = True
             _LOGGER.info("Group '%s' boot guard complete", group.name)
 
-        if group.logic == LOGIC_OR:
-            any_unsafe = any(r.is_unsafe for r in group.rules)
-        else:  # AND
-            any_unsafe = all(r.is_unsafe for r in group.rules)
-
-        if any_unsafe:
+        if self._rules_unsafe(group):
             # Group is unsafe — cancel any settle timer
             if group._settle_cancel is not None:
                 group._settle_cancel()
                 group._settle_cancel = None
                 group.settle_timer_start = None
+            # A group turning unsafe ends an active Force Safe, whatever the cause
+            if not group.is_unsafe and self._force_safe:
+                _LOGGER.warning(
+                    "Group '%s' became unsafe while Force Safe active — reverting to Auto",
+                    group.name,
+                )
+                self._force_safe = False
+                self._force_safe_generation += 1
             group.is_unsafe = True
             self._recalculate()
         else:
@@ -643,32 +656,17 @@ class SafetyCoordinator:
             self._notify_listeners()
             return
 
-        # Force Safe override (bypass settle timers)
-        if self._force_safe:
-            # Check if any rule is currently triggered
-            any_triggered = False
-            for group in self._groups:
-                for rule in group.rules:
-                    if rule.is_unsafe:
-                        any_triggered = True
-                        break
-                if any_triggered:
-                    break
-
-            if not any_triggered:
-                self._is_safe = True
-                self._description = "SAFE: Force Safe override active (timers bypassed)"
-                self._notify_listeners()
-                return
-            # If there are currently unsafe rules, force safe won't help
-            # (it was already reverted by _set_rule_unsafe)
-
-        # Normal evaluation
+        # Normal evaluation. Force Safe only bypassed the settle timers of groups
+        # that are not actually unsafe (see trigger_force_safe), so group state
+        # alone decides here.
         unsafe_groups = [g for g in self._groups if g.is_unsafe]
 
         if not unsafe_groups:
             self._is_safe = True
-            self._description = "SAFE: All groups report safe"
+            if self._force_safe:
+                self._description = "SAFE: Force Safe override active (timers bypassed)"
+            else:
+                self._description = "SAFE: All groups report safe"
             self._boot_complete = True
         else:
             self._is_safe = False
@@ -700,12 +698,19 @@ class SafetyCoordinator:
         gen = self._force_safe_generation
         _LOGGER.info("Force Safe activated (generation %d)", gen)
 
-        # Cancel all settle timers — groups go safe immediately
+        # Cancel all settle timers — groups that are really safe go safe immediately.
+        # Groups with missing data or unsafe rules stay unsafe: Force Safe only
+        # skips waiting, it never overrides an actual unsafe condition.
         for group in self._groups:
             if group._settle_cancel is not None:
                 group._settle_cancel()
                 group._settle_cancel = None
                 group.settle_timer_start = None
+            if group.rules and (
+                not all(r.entity_initialized for r in group.rules)
+                or self._rules_unsafe(group)
+            ):
+                continue
             group.is_unsafe = False
             group.boot_guard_complete = True
 

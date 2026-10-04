@@ -41,4 +41,4 @@ The integration provides several entities for your Home Assistant dashboard:
 - **Master Safe Sensor**: A binary sensor showing the overall observatory safety status.
 - **Group Safe Sensors**: Individual binary sensors for each logical group.
 - **Force Unsafe Switch**: Toggle to manually trigger an unsafe state.
-- **Bypass/Force Buttons**: Manual control over the safety state for testing.
+- **Force Safe Button**: Skips running settle timers. It has no effect while a rule is unsafe or data is missing, and it ends as soon as any group turns unsafe again.
