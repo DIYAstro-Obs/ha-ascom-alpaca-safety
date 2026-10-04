@@ -42,3 +42,7 @@ The integration provides several entities for your Home Assistant dashboard:
 - **Group Safe Sensors**: Individual binary sensors for each logical group.
 - **Force Unsafe Switch**: Toggle to manually trigger an unsafe state.
 - **Force Safe Button**: Skips running settle timers. It has no effect while a rule is unsafe or data is missing, and it ends as soon as any group turns unsafe again.
+
+## Development
+
+Run the unit tests with `python -m pytest`. Only `pytest` is required; Home Assistant is stubbed (see `tests/ha_stubs.py`).
