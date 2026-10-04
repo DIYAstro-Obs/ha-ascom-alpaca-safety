@@ -27,6 +27,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_GROUPS,
+    CONF_GROUP_ID,
     CONF_GROUP_LOGIC,
     CONF_GROUP_NAME,
     CONF_GROUP_SETTLE_TIME,
@@ -131,6 +132,7 @@ class GroupState:
     logic: str
     settle_time: float
     rules: list[RuleState] = field(default_factory=list)
+    group_id: str = ""  # Stable ID (entity unique_ids), independent of list position
 
     # Runtime
     is_unsafe: bool = True  # Start unsafe (boot guard)
@@ -284,8 +286,9 @@ class SafetyCoordinator:
         self._groups.clear()
         groups_config: list[dict[str, Any]] = self.entry.options.get(CONF_GROUPS, [])
 
-        for g_conf in groups_config:
+        for index, g_conf in enumerate(groups_config):
             group = GroupState(
+                group_id=str(g_conf.get(CONF_GROUP_ID) or index),
                 name=g_conf.get(CONF_GROUP_NAME, "Unnamed"),
                 logic=g_conf.get(CONF_GROUP_LOGIC, LOGIC_OR),
                 settle_time=float(

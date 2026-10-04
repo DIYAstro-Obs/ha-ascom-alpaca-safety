@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 import voluptuous as vol
@@ -14,6 +15,7 @@ from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
     CONF_GROUPS,
+    CONF_GROUP_ID,
     CONF_GROUP_LOGIC,
     CONF_GROUP_NAME,
     CONF_GROUP_SETTLE_TIME,
@@ -184,6 +186,7 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
                 errors[CONF_GROUP_NAME] = "A group with this name already exists"
             else:
                 new_group = {
+                    CONF_GROUP_ID: uuid.uuid4().hex[:8],
                     CONF_GROUP_NAME: name,
                     CONF_GROUP_LOGIC: user_input.get(CONF_GROUP_LOGIC, LOGIC_OR),
                     CONF_GROUP_SETTLE_TIME: int(

@@ -14,8 +14,10 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, callback
 
 from .const import (
-    ALPACA_SERVER_COMPONENT,
     ALPACA_SERVER_API_KEY,
+    ALPACA_SERVER_COMPONENT,
+    CONF_GROUP_ID,
+    CONF_GROUPS,
     DATA_COORDINATOR,
     DATA_SERVER_UNREGISTER,
     DOMAIN,
@@ -36,6 +38,9 @@ _DATA_STARTED_UNSUB = "started_unsub"
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ASCOM Alpaca Safety from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Must run before the update listener below is registered, so it doesn't reload
+    _async_migrate_group_ids(hass, entry)
 
     # Create and start the safety coordinator
     coordinator = SafetyCoordinator(hass, entry)
@@ -59,6 +64,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _LOGGER.info("ASCOM Alpaca Safety integration loaded successfully")
     return True
+
+
+@callback
+def _async_migrate_group_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Give groups without a stable ID one.
+
+    Group entity unique_ids used to be built from the group's list position.
+    Using that position as the ID of existing groups keeps their entities
+    unchanged; groups created later get a random ID in the options flow.
+    """
+    groups = [dict(group) for group in entry.options.get(CONF_GROUPS, [])]
+    changed = False
+    for index, group in enumerate(groups):
+        if not group.get(CONF_GROUP_ID):
+            group[CONF_GROUP_ID] = str(index)
+            changed = True
+
+    if changed:
+        _LOGGER.info("Assigned stable IDs to existing safety groups")
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, CONF_GROUPS: groups}
+        )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

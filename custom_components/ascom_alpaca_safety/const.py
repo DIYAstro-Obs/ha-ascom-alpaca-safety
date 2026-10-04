@@ -14,6 +14,7 @@ DEFAULT_UNSAFE_DELAY = 0  # no delay by default
 
 # --- Configuration Keys ---
 CONF_GROUPS = "groups"
+CONF_GROUP_ID = "group_id"
 CONF_GROUP_NAME = "group_name"
 CONF_GROUP_LOGIC = "group_logic"
 CONF_GROUP_SETTLE_TIME = "settle_time"

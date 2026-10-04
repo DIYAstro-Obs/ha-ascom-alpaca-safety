@@ -10,11 +10,13 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     CONF_GROUPS,
+    CONF_GROUP_ID,
     CONF_GROUP_NAME,
     DATA_COORDINATOR,
     DOMAIN,
@@ -43,13 +45,34 @@ async def async_setup_entry(
     # Master safety sensor
     entities.append(SafetyMasterSensor(coordinator, entry))
 
-    # Per-group sensors
+    # Per-group sensors, identified by the group's stable ID (not its position)
     groups_config = entry.options.get(CONF_GROUPS, [])
+    group_ids: set[str] = set()
     for i, g_conf in enumerate(groups_config):
+        group_id = str(g_conf.get(CONF_GROUP_ID) or i)
         name = g_conf.get(CONF_GROUP_NAME, f"Group {i}")
-        entities.append(SafetyGroupSensor(coordinator, entry, i, name))
+        group_ids.add(group_id)
+        entities.append(SafetyGroupSensor(coordinator, entry, group_id, name))
 
+    _remove_stale_group_sensors(hass, entry, group_ids)
     async_add_entities(entities, True)
+
+
+@callback
+def _remove_stale_group_sensors(
+    hass: HomeAssistant, entry: ConfigEntry, group_ids: set[str]
+) -> None:
+    """Remove registry entries of group sensors whose group no longer exists."""
+    ent_reg = er.async_get(hass)
+    prefix = f"{entry.entry_id}_{UNIQUE_ID_GROUP_PREFIX}"
+    keep = {f"{prefix}{group_id}" for group_id in group_ids}
+    for ent in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+        if (
+            ent.domain == "binary_sensor"
+            and ent.unique_id.startswith(prefix)
+            and ent.unique_id not in keep
+        ):
+            ent_reg.async_remove(ent.entity_id)
 
 
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -126,16 +149,16 @@ class SafetyGroupSensor(BinarySensorEntity):
         self,
         coordinator: SafetyCoordinator,
         entry: ConfigEntry,
-        group_index: int,
+        group_id: str,
         group_name: str,
     ) -> None:
         """Initialize a group sensor."""
         self._coordinator = coordinator
         self._entry = entry
-        self._group_index = group_index
+        self._group_id = group_id
         self._group_name = group_name
         self._attr_unique_id = (
-            f"{entry.entry_id}_{UNIQUE_ID_GROUP_PREFIX}{group_index}"
+            f"{entry.entry_id}_{UNIQUE_ID_GROUP_PREFIX}{group_id}"
         )
         self._attr_name = f"Group {group_name}"
         self._remove_listener = None
@@ -146,10 +169,10 @@ class SafetyGroupSensor(BinarySensorEntity):
 
     @property
     def _group_state(self):
-        """Get the group state by index."""
-        groups = self._coordinator.groups
-        if self._group_index < len(groups):
-            return groups[self._group_index]
+        """Get the group state by its stable ID."""
+        for group in self._coordinator.groups:
+            if group.group_id == self._group_id:
+                return group
         return None
 
     @property
