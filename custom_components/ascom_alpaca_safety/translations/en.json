@@ -1,0 +1,91 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "ASCOM Alpaca Safety Setup",
+                "description": "Add the ASCOM Alpaca Safety monitor to Home Assistant. Safety groups and rules can be configured after setup via the Options menu."
+            }
+        },
+        "abort": {
+            "already_configured": "ASCOM Alpaca Safety is already configured."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "ASCOM Alpaca Safety Configuration",
+                "description": "Manage safety groups and rules.",
+                "menu_options": {
+                    "add_group": "Add new group",
+                    "edit_group": "Edit group: {group_name}"
+                }
+            },
+            "add_group": {
+                "title": "Add Safety Group",
+                "data": {
+                    "group_name": "Group Name",
+                    "group_logic": "Logic Type",
+                    "settle_time": "Settle Time (seconds)"
+                },
+                "data_description": {
+                    "group_name": "A unique name for this safety group (e.g., Weather, Moon)",
+                    "group_logic": "OR = any rule triggers unsafe. AND = all rules must trigger.",
+                    "settle_time": "Time in seconds the group must remain safe before recovery."
+                }
+            },
+            "edit_group": {
+                "title": "Edit Group: {group_name}",
+                "description": "Manage rules in this group.",
+                "menu_options": {
+                    "add_rule": "Add new rule",
+                    "edit_group_settings": "Edit group settings",
+                    "delete_group": "Delete this group",
+                    "edit_rule": "Edit rule: {rule_entity}"
+                }
+            },
+            "edit_group_settings": {
+                "title": "Edit Group Settings",
+                "data": {
+                    "group_name": "Group Name",
+                    "group_logic": "Logic Type",
+                    "settle_time": "Settle Time (seconds)"
+                }
+            },
+            "add_rule": {
+                "title": "Add Rule",
+                "data": {
+                    "entity_id": "Entity",
+                    "operator": "Operator",
+                    "threshold": "Threshold Value",
+                    "unsafe_delay": "Unsafe Delay (seconds)",
+                    "watchdog_timeout": "Watchdog Timeout (seconds)"
+                },
+                "data_description": {
+                    "entity_id": "The Home Assistant entity to monitor.",
+                    "operator": "Comparison operator for the threshold check.",
+                    "threshold": "The value to compare the entity state against.",
+                    "unsafe_delay": "Ignore brief spikes shorter than this (0 = instant).",
+                    "watchdog_timeout": "Mark unsafe if entity not updated within this time (0 = disabled)."
+                }
+            },
+            "edit_rule": {
+                "title": "Edit Rule",
+                "data": {
+                    "entity_id": "Entity",
+                    "operator": "Operator",
+                    "threshold": "Threshold Value",
+                    "unsafe_delay": "Unsafe Delay (seconds)",
+                    "watchdog_timeout": "Watchdog Timeout (seconds)"
+                }
+            },
+            "delete_group": {
+                "title": "Delete Group",
+                "description": "Are you sure you want to delete the group '{group_name}' and all its rules?"
+            },
+            "delete_rule": {
+                "title": "Delete Rule",
+                "description": "Are you sure you want to delete the rule for entity '{rule_entity}'?"
+            }
+        }
+    }
+}
