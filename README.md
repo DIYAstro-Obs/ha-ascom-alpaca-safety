@@ -46,3 +46,17 @@ The integration provides several entities for your Home Assistant dashboard:
 ## Development
 
 Run the unit tests with `python -m pytest`. Only `pytest` is required; Home Assistant is stubbed (see `tests/ha_stubs.py`).
+
+## Development Deployment
+
+`deploy.ps1` copies the integration to `/config/custom_components/` on your Home Assistant via SCP and restarts Home Assistant Core. Copy `deployconf` to `deployconf.secrets` (ignored by git) and set:
+
+| Key | Purpose |
+|-----|---------|
+| `SSH_URL` | Host or `host:port` of the SSH add-on (required, port defaults to 22) |
+| `SSH_USER` | SSH user (default `root`) |
+| `SSH_PW` | Optional SSH password. Stored in plain text, so use it only for test systems. Leave empty to be asked on every deploy. |
+
+`HA_URL` and `HA_TOKEN` may stay in the file, but `deploy.ps1` does not use them.
+
+Run `.\deploy.ps1 -DryRun` first: it prints the target (`user@host:port`), the auth mode and the planned steps without connecting.
