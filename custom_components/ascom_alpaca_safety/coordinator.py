@@ -49,6 +49,7 @@ from .const import (
     OPERATOR_GT,
     STORAGE_KEY_FORCE_UNSAFE,
     STORAGE_VERSION,
+    WATCHDOG_CHECK_INTERVAL,
     storage_key,
 )
 from .rules import (
@@ -274,15 +275,14 @@ class SafetyCoordinator:
         # Re-evaluate after HA is fully started (entities may load late)
         @callback
         def _on_ha_started(event: Event) -> None:
-            pending = [
-                g.name for g in self._groups if not g.boot_guard_complete
-            ]
+            pending = [g for g in self._groups if not g.boot_guard_complete]
             if pending:
                 _LOGGER.info(
                     "HA started — re-evaluating pending groups: %s",
-                    ", ".join(pending),
+                    ", ".join(g.name for g in pending),
                 )
-                self._initial_evaluate()
+                # only these: a group that is done may have an unsafe delay or a settle timer running
+                self._initial_evaluate(pending)
             self._update_missing_entity_issues()
 
         cancel = self.hass.bus.async_listen_once(
@@ -303,18 +303,24 @@ class SafetyCoordinator:
             self._watchdog_interval_cancel = None
 
         for group in self._groups:
-            if group._settle_cancel is not None:
-                group._settle_cancel()
-                group._settle_cancel = None
-            for rule in group.rules:
-                if rule._unsafe_delay_cancel is not None:
-                    rule._unsafe_delay_cancel()
-                    rule._unsafe_delay_cancel = None
-                self._cancel_unavailable_timer(rule)
+            self._cancel_group_timers(group)
 
         self._update_callbacks.clear()
 
         _LOGGER.info("SafetyCoordinator stopped")
+
+    @classmethod
+    def _cancel_group_timers(cls, group: GroupState) -> None:
+        """Cancel the settle timer of the group and the timers of its rules."""
+        if group._settle_cancel is not None:
+            group._settle_cancel()
+            group._settle_cancel = None
+        group.settle_timer_start = None
+        for rule in group.rules:
+            if rule._unsafe_delay_cancel is not None:
+                rule._unsafe_delay_cancel()
+                rule._unsafe_delay_cancel = None
+            cls._cancel_unavailable_timer(rule)
 
     def _build_groups(self) -> None:
         """Build internal group/rule structure from config entry options."""
@@ -377,12 +383,26 @@ class SafetyCoordinator:
             )
             # Interval for robust watchdog check (Option 3)
             self._watchdog_interval_cancel = async_track_time_interval(
-                self.hass, self._check_watchdogs, timedelta(seconds=30)
+                self.hass, self._check_watchdogs, self._watchdog_interval()
             )
 
-    def _initial_evaluate(self) -> None:
-        """Evaluate all rules against current entity states on startup."""
+    def _watchdog_interval(self) -> timedelta:
+        """Time between two watchdog checks: 30 s, or half of the shortest timeout (at least 1 s).
+
+        With a fixed 30 s a timeout of 10 s would only be noticed after up to 40 s.
+        """
+        seconds = float(WATCHDOG_CHECK_INTERVAL)
         for group in self._groups:
+            for rule in group.rules:
+                if rule.watchdog_timeout > 0:
+                    seconds = min(seconds, rule.watchdog_timeout / 2)
+        return timedelta(seconds=max(1.0, seconds))
+
+    def _initial_evaluate(self, groups: list[GroupState] | None = None) -> None:
+        """Evaluate the rules of the groups (default: all) against the current entity states."""
+        for group in self._groups if groups is None else groups:
+            # The evaluation starts from scratch: timers of an earlier one must not run on
+            self._cancel_group_timers(group)
             all_initialized = True
             for rule in group.rules:
                 state = self.hass.states.get(rule.entity_id)
@@ -438,6 +458,9 @@ class SafetyCoordinator:
                 self._cancel_unavailable_timer(rule)
                 rule.entity_available = True
                 rule.entity_initialized = True
+                # It has just reported: the watchdog is not expired, whatever the value says. Without this
+                # the description keeps "watchdog expired" until the next check.
+                rule.watchdog_expired = False
 
                 # Watchdog is now handled by periodic _check_watchdogs (Option 3)
 

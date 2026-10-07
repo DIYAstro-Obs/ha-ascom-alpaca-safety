@@ -49,7 +49,8 @@ The configuration is handled via the integration's **Options** menu:
 - A rule on an entity that **does not exist or is disabled** reports unsafe and raises an issue under *Settings → System → Repairs* ("Safety rule: entity not found") until you fix or delete the rule. The check runs every 30 seconds once Home Assistant has started.
 - A group **without rules** monitors nothing and reports unsafe (so does a monitor without any group).
 - **Watchdog timeout**: "unsafe if the entity has not reported for N seconds". Only entities that report again and again (a `sensor`, a weather entity) can go stale: for them the default is 300 s. A binary sensor or a switch only reports when its state changes, an unchanged value is not stale, so the default is off (0) for everything but sensors and weather. Leave the field empty to get that default; if you enter a watchdog for a binary sensor, it will report "watchdog expired" after that time without a change.
-- The watchdog is checked every 30 seconds, a timeout below that is detected up to 30 seconds late.
+- The watchdog is checked every 30 seconds; for a timeout below a minute it is checked twice per timeout (at least once a second), so a short timeout is not noticed late.
+- **AND groups** report unsafe as soon as one entity of the group is missing, unavailable or has not reported yet, not only when all rules trigger: a rule without a value cannot say "safe". Use AND for redundant sensors only when each of them reports reliably.
 
 ### Behaviour at start
 

@@ -11,6 +11,7 @@ ALPACA_SERVER_COMPONENT = "ascom_alpaca_server"  # Server's actual HA component 
 DEFAULT_SETTLE_TIME = 300  # 5 minutes (per group, 0 = no waiting)
 DEFAULT_WATCHDOG_TIMEOUT = 300  # 5 minutes, for entities that report regularly (see rules.py)
 DEFAULT_UNSAFE_DELAY = 0  # no delay by default
+WATCHDOG_CHECK_INTERVAL = 30  # seconds between two watchdog checks (shorter for a short timeout)
 
 # --- Configuration Keys ---
 CONF_GROUPS = "groups"
