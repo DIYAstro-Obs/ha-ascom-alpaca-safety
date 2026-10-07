@@ -1,6 +1,6 @@
 # ASCOM Alpaca Safety (Safety Monitor) for Home Assistant
 
-**ASCOM Alpaca Safety** is a sophisticated safety monitoring system for astronomical observatories. it aggregates various Home Assistant sensors and entities into a unified "Safe/Unsafe" status, which it then exposes to the ASCOM Alpaca ecosystem (via [ASCOM Alpaca Server](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-server)).
+**ASCOM Alpaca Safety** is a sophisticated safety monitoring system for astronomical observatories. It aggregates various Home Assistant sensors and entities into a unified "Safe/Unsafe" status, which it then exposes to the ASCOM Alpaca ecosystem (via [ASCOM Alpaca Server](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-server)).
 
 ![Alpaca Safety Logo](custom_components/ascom_alpaca_safety/brand/icon@2x.png)
 
@@ -9,6 +9,8 @@
 > This project is provided "as-is" without any warranty. It has not yet been tested in a real-life observatory environment. Use it at your own risk.
 >
 > The project is **under active development**: breaking changes are possible and even likely. Options, entity names and IDs, and the interface between the integrations may change from one version to the next, and you may have to set things up again. Testing is very welcome! Please report any bugs by opening an [issue](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-safety/issues). Contributions are also highly appreciated.
+
+This project is not affiliated with or endorsed by the ASCOM Initiative.
 
 ## Features
 
@@ -25,10 +27,22 @@
 
 ## Installation
 
-1. *(Optional, required to expose the Safety Monitor via Alpaca)* Ensure the **ASCOM Alpaca Server** integration is installed and configured. When Home Assistant starts, the Server is set up first (`after_dependencies`) and Safety registers with it at once. If it is missing, Safety runs in standalone mode and shows a notification; it registers as soon as the Server is added.
-2. Copy the `custom_components/ascom_alpaca_safety` folder to your Home Assistant `custom_components` directory.
-3. Restart Home Assistant.
-4. Go to **Settings -> Devices & Services -> Add Integration** and search for **ASCOM Alpaca Safety**.
+**ASCOM Alpaca Server** (optional, but required to expose the Safety Monitor via Alpaca): install the [ASCOM Alpaca Server](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-server) integration, **version 0.11.0 or newer** (older versions do not keep `Connected` per client, and astronomy software cannot connect to the Safety Monitor). When Home Assistant starts, the Server is set up first (`after_dependencies`) and Safety registers with it at once. If it is missing, Safety runs in standalone mode and shows a notification; it registers as soon as the Server is added.
+
+### Via HACS (recommended)
+
+1. Make sure [HACS](https://hacs.xyz/) is installed.
+2. Open **HACS**, click the three dots in the top right corner and select **Custom repositories**.
+3. Paste `https://github.com/DIYAstro-Obs/ha-ascom-alpaca-safety`, select **Integration** as the category and click **Add**.
+4. Find **ASCOM Alpaca Safety** in the list and click **Download**.
+5. Restart Home Assistant.
+
+### Manual installation
+
+1. Copy the `custom_components/ascom_alpaca_safety` folder to the `custom_components` directory of your Home Assistant.
+2. Restart Home Assistant.
+
+Then go to **Settings -> Devices & Services -> Add Integration** and search for **ASCOM Alpaca Safety**.
 
 ## Configuration
 
@@ -101,7 +115,7 @@ actions:
 
 ## Alpaca behaviour
 
-- `Connected` is kept per client by the **ASCOM Alpaca Server** (not by Safety): a client that disconnects does not disconnect another one. Use the Server version that belongs to this version of Safety.
+- `Connected` is kept per client by the **ASCOM Alpaca Server** (not by Safety): a client that disconnects does not disconnect another one. This needs **ASCOM Alpaca Server 0.11.0 or newer**.
 - `IsSafe` answers whether or not the client has connected (ASCOM would answer `NotConnected` before). This is meant: saving the options reloads Safety, and clients that are connected must not be cut off from the monitor by an error.
 - Safety implements the interface version 1 of the SafetyMonitor. The members of ASCOM Platform 7 (`Connect`, `Disconnect`, `Connecting`, `DeviceState`) are not implemented: clients use them only for devices that report interface version 3, and every client still supports the classic `Connected`.
 
