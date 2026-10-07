@@ -73,7 +73,7 @@
             },
             "rule_entity": {
                 "title": "Rule: choose the entity",
-                "description": "Group '{group_name}'. Choose the entity this rule watches. The next step shows its current state.",
+                "description": "Group '{group_name}'. Choose the entity this rule watches. The next step lets you watch one of its attributes instead of its state.",
                 "data": {
                     "entity_id": "Entity"
                 },
@@ -81,19 +81,31 @@
                     "entity_id": "The Home Assistant entity to monitor."
                 }
             },
+            "rule_source": {
+                "title": "Rule: what does it watch?",
+                "description": "Entity {entity_id}, current state: {current_state}. The rule can watch the state of the entity or one of its attributes, for example the wind speed of a weather entity.",
+                "data": {
+                    "attribute": "Watch"
+                },
+                "data_description": {
+                    "attribute": "The state of the entity, or one of its attributes."
+                }
+            },
             "rule_details": {
                 "title": "Rule: when is it unsafe?",
-                "description": "Entity {entity_id}, current state: {current_state}. A rule describes the UNSAFE condition, for example a rain sensor == on.",
+                "description": "Watching {entity_id}, current value: {current_state}. A rule describes the UNSAFE condition, for example a rain sensor == on.",
                 "data": {
                     "operator": "Operator",
                     "threshold": "Threshold Value",
                     "unsafe_delay": "Unsafe Delay (seconds)",
+                    "unavailable_delay": "Unavailable Grace Time (seconds)",
                     "watchdog_timeout": "Watchdog Timeout (seconds)"
                 },
                 "data_description": {
-                    "operator": "Comparison operator for the threshold check.",
-                    "threshold": "The value to compare the entity state against. Numbers for > < >= <=; on or off for binary sensors, switches and lights; the states of weather entities and of selects are offered; other states are compared without regard to upper or lower case.",
+                    "operator": "Comparison operator for the threshold check. 'Is one of' and 'Is none of' take a list.",
+                    "threshold": "The value to compare against. Numbers for > < >= <=; on or off for the state of binary sensors, switches and lights; the states of weather entities and of selects are offered; other values are compared without regard to upper or lower case. For 'Is one of' and 'Is none of': a list separated by commas, for example rainy, pouring, lightning.",
                     "unsafe_delay": "Ignore brief spikes shorter than this (0 = instant).",
+                    "unavailable_delay": "An entity that is unavailable or unknown counts as unsafe at once (0). Enter a time to wait for it to come back first: until then the rule keeps its last result.",
                     "watchdog_timeout": "Mark unsafe if the entity has not reported within this time (0 = off). Leave empty: 300 s for sensors and weather, off for everything else (binary sensors, switches and helpers only report when they change)."
                 }
             }
@@ -101,7 +113,8 @@
         "error": {
             "threshold_not_numeric": "This operator compares numbers: enter a number as the threshold.",
             "threshold_not_on_off": "This entity only reports on or off: enter on or off as the threshold.",
-            "operator_not_for_on_off": "This entity only reports on or off: use Equal (==) or Not equal (!=)."
+            "operator_not_for_on_off": "This entity only reports on or off: use Equal (==) or Not equal (!=).",
+            "list_empty": "Enter at least one value; separate several with commas (for example rainy, pouring)."
         }
     },
     "issues": {

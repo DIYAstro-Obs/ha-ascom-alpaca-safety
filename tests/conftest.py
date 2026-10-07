@@ -38,7 +38,9 @@ def make(monkeypatch):
         hass = ha_stubs.FakeHass()
         hass.is_running = running
         for eid, value in initial.items():
-            hass.states.set(eid, value)
+            # a state, or (state, attributes)
+            state, attributes = value if isinstance(value, tuple) else (value, None)
+            hass.states.set(eid, state, attributes)
         entry = types.SimpleNamespace(entry_id="E", options={"groups": groups})
         coordinator = coordinator_mod.SafetyCoordinator(hass, entry)
         asyncio.run(coordinator.async_start())

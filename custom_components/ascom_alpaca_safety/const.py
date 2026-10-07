@@ -24,6 +24,11 @@ CONF_RULE_OPERATOR = "operator"
 CONF_RULE_THRESHOLD = "threshold"
 CONF_RULE_UNSAFE_DELAY = "unsafe_delay"
 CONF_RULE_WATCHDOG_TIMEOUT = "watchdog_timeout"
+CONF_RULE_ATTRIBUTE = "attribute"  # empty: the rule watches the state of the entity
+CONF_RULE_UNAVAILABLE_DELAY = "unavailable_delay"  # seconds an entity may be unavailable before it counts
+
+# value of the "what to watch" choice that stands for the state of the entity (not an attribute name)
+SOURCE_STATE = "__state__"
 
 # --- Logic Types ---
 LOGIC_OR = "OR"
@@ -36,6 +41,8 @@ OPERATOR_GTE = ">="
 OPERATOR_LTE = "<="
 OPERATOR_EQ = "=="
 OPERATOR_NEQ = "!="
+OPERATOR_IN = "in"  # the value is one of a comma separated list
+OPERATOR_NOT_IN = "not in"
 
 OPERATORS = [
     OPERATOR_GT,
@@ -44,6 +51,8 @@ OPERATORS = [
     OPERATOR_LTE,
     OPERATOR_EQ,
     OPERATOR_NEQ,
+    OPERATOR_IN,
+    OPERATOR_NOT_IN,
 ]
 
 OPERATOR_LABELS = {
@@ -53,6 +62,8 @@ OPERATOR_LABELS = {
     OPERATOR_LTE: "Less or equal (<=)",
     OPERATOR_EQ: "Equal (==)",
     OPERATOR_NEQ: "Not equal (!=)",
+    OPERATOR_IN: "Is one of (a, b, c)",
+    OPERATOR_NOT_IN: "Is none of (a, b, c)",
 }
 
 # --- Coordinator Data Keys ---
@@ -64,6 +75,10 @@ UNIQUE_ID_MASTER = "master_safe"
 UNIQUE_ID_GROUP_PREFIX = "group_"
 UNIQUE_ID_FORCE_UNSAFE = "force_unsafe"
 UNIQUE_ID_FORCE_SAFE = "force_safe"
+UNIQUE_ID_REASON = "reason"
+
+# --- Event for automations: fired when the monitor changes between safe and unsafe ---
+EVENT_SAFETY_CHANGED = "ascom_alpaca_safety_changed"
 
 # --- Storage (state that has to survive a restart or reload) ---
 STORAGE_VERSION = 1
@@ -75,7 +90,7 @@ def storage_key(entry_id: str) -> str:
     return f"{DOMAIN}.{entry_id}"
 
 # --- Platforms ---
-PLATFORMS = ["binary_sensor", "switch", "button"]
+PLATFORMS = ["binary_sensor", "sensor", "switch", "button"]
 
 # --- Device Info for Server Registration ---
 SAFETY_DEVICE_TYPE = "SafetyMonitor"

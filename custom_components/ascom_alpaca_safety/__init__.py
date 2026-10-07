@@ -277,31 +277,11 @@ def _dispatch_alpaca_action(
     """Map an Alpaca action string to a coordinator response."""
     action_lower = action.lower()
 
+    # "Connected" is kept per client by the ASCOM Alpaca Server, it never gets here. IsSafe answers
+    # whether or not the client has connected: after a reload (saving the options) the clients are
+    # still there and must not be cut off.
     if action_lower == "issafe":
         return {"Value": coordinator.is_safe}
-
-    if action_lower == "connected":
-        # Handle PUT/POST to connected=True/False
-        if params is not None:
-            for k, v in params.items():
-                if k.lower() == "connected":
-                    if isinstance(v, str):
-                        v_lower = v.lower()
-                        if v_lower == "true":
-                            coordinator.is_connected = True
-                        elif v_lower == "false":
-                            coordinator.is_connected = False
-                        else:
-                            return {
-                                "Value": False,
-                                "ErrorNumber": 0x400,
-                                "ErrorMessage": f"Invalid boolean value: {v}",
-                                "HttpStatus": 400,
-                            }
-                    else:
-                        coordinator.is_connected = bool(v)
-                    break
-        return {"Value": coordinator.is_connected}
 
     if action_lower == "name":
         return {"Value": SAFETY_DEVICE_NAME}

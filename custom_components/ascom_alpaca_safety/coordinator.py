@@ -32,15 +32,18 @@ from .const import (
     CONF_GROUP_LOGIC,
     CONF_GROUP_NAME,
     CONF_GROUP_SETTLE_TIME,
+    CONF_RULE_ATTRIBUTE,
     CONF_RULE_ENTITY,
     CONF_RULE_OPERATOR,
     CONF_RULE_THRESHOLD,
+    CONF_RULE_UNAVAILABLE_DELAY,
     CONF_RULE_UNSAFE_DELAY,
     CONF_RULE_WATCHDOG_TIMEOUT,
     CONF_RULES,
     DEFAULT_SETTLE_TIME,
     DEFAULT_UNSAFE_DELAY,
     DOMAIN,
+    EVENT_SAFETY_CHANGED,
     LOGIC_AND,
     LOGIC_OR,
     OPERATOR_GT,
@@ -48,7 +51,12 @@ from .const import (
     STORAGE_VERSION,
     storage_key,
 )
-from .rules import default_watchdog_timeout, rule_triggered
+from .rules import (
+    UNAVAILABLE_STATES,
+    default_watchdog_timeout,
+    rule_triggered,
+    watched_value,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,6 +90,8 @@ class RuleState:
     threshold: Any  # Can be float or str
     unsafe_delay: float
     watchdog_timeout: float
+    attribute: str = ""  # empty: the rule watches the state of the entity
+    unavailable_delay: float = 0.0  # seconds the entity may be unavailable before the rule counts it
 
     # Runtime
     is_triggered: bool = False
@@ -92,9 +102,20 @@ class RuleState:
 
     # Unsafe delay tracking
     _unsafe_delay_cancel: CALLBACK_TYPE | None = None
+    # Grace time for an unavailable entity
+    _unavailable_cancel: CALLBACK_TYPE | None = None
 
     # Current entity value (for descriptions)
     current_value: str | None = None
+
+    @property
+    def label(self) -> str:
+        """The entity, with the attribute if the rule watches one."""
+        return f"{self.entity_id}[{self.attribute}]" if self.attribute else self.entity_id
+
+    def read(self, state: State) -> str | None:
+        """The value the rule watches in this state (None: the attribute is missing)."""
+        return watched_value(state.state, state.attributes, self.attribute)
 
     def evaluate(self, state_value: str | None) -> bool:
         """Evaluate the rule against a state value. Returns True if UNSAFE triggered."""
@@ -110,7 +131,7 @@ class RuleState:
                 state_value,
                 self.operator_str,
                 self.threshold,
-                self.entity_id,
+                self.label,
             )
             return True  # Can't evaluate => unsafe
         return result
@@ -178,9 +199,11 @@ class GroupState:
                 parts.append(f"{r.entity_id} unavailable")
             elif not r.entity_initialized:
                 parts.append(f"{r.entity_id} not initialized")
+            elif r.current_value is None:
+                parts.append(f"{r.label} missing")
             else:
                 parts.append(
-                    f"{r.entity_id} {r.current_value} "
+                    f"{r.label} {r.current_value} "
                     f"{r.operator_str} {r.threshold}"
                 )
 
@@ -204,12 +227,11 @@ class SafetyCoordinator:
         self._listeners: list[CALLBACK_TYPE] = []
         self._watchdog_interval_cancel: CALLBACK_TYPE | None = None
         self._update_callbacks: list[Callable[[], None]] = []
+        # The last state sent as an event (None: nothing sent yet, so the first result is sent)
+        self._last_event_safe: bool | None = None
 
         # Force Unsafe (maintenance mode) has to survive a restart and the reload after an options change
         self._store: Store = Store(hass, STORAGE_VERSION, storage_key(entry.entry_id))
-
-        # Master state
-        self.is_connected: bool = False
 
     # --- Properties ---
 
@@ -288,6 +310,7 @@ class SafetyCoordinator:
                 if rule._unsafe_delay_cancel is not None:
                     rule._unsafe_delay_cancel()
                     rule._unsafe_delay_cancel = None
+                self._cancel_unavailable_timer(rule)
 
         self._update_callbacks.clear()
 
@@ -331,6 +354,8 @@ class SafetyCoordinator:
                             default_watchdog_timeout(entity_id),
                         )
                     ),
+                    attribute=str(r_conf.get(CONF_RULE_ATTRIBUTE) or "").strip(),
+                    unavailable_delay=float(r_conf.get(CONF_RULE_UNAVAILABLE_DELAY) or 0),
                 )
                 group.rules.append(rule)
 
@@ -361,7 +386,8 @@ class SafetyCoordinator:
             all_initialized = True
             for rule in group.rules:
                 state = self.hass.states.get(rule.entity_id)
-                if state is None or state.state in ("unavailable", "unknown"):
+                if state is None or state.state in UNAVAILABLE_STATES:
+                    # No grace time here: nothing is known about the entity yet
                     rule.entity_available = state is not None and state.state != "unavailable"
                     rule.entity_initialized = False
                     rule.is_unsafe = True
@@ -370,7 +396,7 @@ class SafetyCoordinator:
                 else:
                     rule.entity_available = True
                     rule.entity_initialized = True
-                    triggered = rule.evaluate(state.state)
+                    triggered = rule.evaluate(rule.read(state))
                     rule.is_triggered = triggered
                     rule.is_unsafe = triggered  # No delay on initial eval
 
@@ -404,25 +430,19 @@ class SafetyCoordinator:
                 if rule.entity_id != entity_id:
                     continue
 
-                # Update availability
-                if new_state is None or new_state.state == "unavailable":
-                    rule.entity_available = False
-                    rule.entity_initialized = False
-                    self._set_rule_unsafe(rule, group)
+                if new_state is None or new_state.state in UNAVAILABLE_STATES:
+                    self._handle_rule_unavailable(rule, group, new_state)
                     continue
 
-                if new_state.state == "unknown":
-                    rule.entity_initialized = False
-                    self._set_rule_unsafe(rule, group)
-                    continue
-
+                # The entity reports a value again: a running grace time is over
+                self._cancel_unavailable_timer(rule)
                 rule.entity_available = True
                 rule.entity_initialized = True
 
                 # Watchdog is now handled by periodic _check_watchdogs (Option 3)
 
                 # Evaluate rule
-                triggered = rule.evaluate(new_state.state)
+                triggered = rule.evaluate(rule.read(new_state))
                 rule.is_triggered = triggered
 
                 if triggered:
@@ -431,6 +451,41 @@ class SafetyCoordinator:
                     self._handle_rule_cleared(rule, group)
 
         self._recalculate()
+
+    def _handle_rule_unavailable(
+        self, rule: RuleState, group: GroupState, state: State | None
+    ) -> None:
+        """The entity is unavailable, unknown or gone: unsafe at once, or after the grace time of the rule."""
+        if rule.unavailable_delay > 0 and rule.entity_initialized:
+            # Until the grace time is over the rule keeps its last result: the entity may be back soon
+            if rule._unavailable_cancel is None:
+
+                @callback
+                def _grace_over(_now: Any) -> None:
+                    rule._unavailable_cancel = None
+                    current = self.hass.states.get(rule.entity_id)
+                    if current is None or current.state in UNAVAILABLE_STATES:
+                        self._mark_unavailable(rule, group, current)
+
+                rule._unavailable_cancel = async_call_later(
+                    self.hass, rule.unavailable_delay, _grace_over
+                )
+            return
+        self._mark_unavailable(rule, group, state)
+
+    def _mark_unavailable(
+        self, rule: RuleState, group: GroupState, state: State | None
+    ) -> None:
+        """The rule has no value: UNSAFE."""
+        rule.entity_available = state is not None and state.state != "unavailable"
+        rule.entity_initialized = False
+        self._set_rule_unsafe(rule, group)
+
+    @staticmethod
+    def _cancel_unavailable_timer(rule: RuleState) -> None:
+        if rule._unavailable_cancel is not None:
+            rule._unavailable_cancel()
+            rule._unavailable_cancel = None
 
     def _handle_rule_triggered(self, rule: RuleState, group: GroupState) -> None:
         """Handle a rule that just became triggered (potential UNSAFE)."""
@@ -592,8 +647,8 @@ class SafetyCoordinator:
                     # If just recovered, re-evaluate rule based on current state
                     if not rule.watchdog_expired:
                         state = self.hass.states.get(rule.entity_id)
-                        if state:
-                            triggered = rule.evaluate(state.state)
+                        if state and state.state not in UNAVAILABLE_STATES:
+                            triggered = rule.evaluate(rule.read(state))
                             rule.is_triggered = triggered
                             if triggered:
                                 self._handle_rule_triggered(rule, group)
@@ -685,31 +740,37 @@ class SafetyCoordinator:
 
     @callback
     def _recalculate(self) -> None:
-        """Recalculate the master safety state."""
+        """Recalculate the master safety state and tell listeners and automations."""
+        self._is_safe, self._description = self._master_state()
+
+        # An event for automations, whenever the monitor reports something else than the last time
+        # (also the first result after a start, which is unsafe: the monitor does not know the time before)
+        if self._is_safe != self._last_event_safe:
+            self._last_event_safe = self._is_safe
+            self.hass.bus.async_fire(
+                EVENT_SAFETY_CHANGED,
+                {"is_safe": self._is_safe, "reason": self._description},
+            )
+
+        self._notify_listeners()
+
+    def _master_state(self) -> tuple[bool, str]:
+        """The master state: ``(is_safe, description)``."""
         # Force Unsafe override
         if self._force_unsafe:
-            self._is_safe = False
-            self._description = "UNSAFE: Force Unsafe (Maintenance Mode) active"
-            self._notify_listeners()
-            return
+            return False, "UNSAFE: Force Unsafe (Maintenance Mode) active"
 
         # Check boot guard
         if self._groups and not all(g.boot_guard_complete for g in self._groups):
-            self._is_safe = False
             pending = [g.name for g in self._groups if not g.boot_guard_complete]
-            self._description = (
+            return False, (
                 f"UNSAFE: System Initializing — "
                 f"waiting for groups: {', '.join(pending)}"
             )
-            self._notify_listeners()
-            return
 
         # Check if no groups configured — fail-safe: UNSAFE by default
         if not self._groups:
-            self._is_safe = False
-            self._description = "UNSAFE: No safety groups configured"
-            self._notify_listeners()
-            return
+            return False, "UNSAFE: No safety groups configured"
 
         # Normal evaluation. Force Safe only bypassed the settle timers of groups
         # that are not actually unsafe (see trigger_force_safe), so group state
@@ -717,17 +778,51 @@ class SafetyCoordinator:
         unsafe_groups = [g for g in self._groups if g.is_unsafe]
 
         if not unsafe_groups:
-            self._is_safe = True
             if self._force_safe:
-                self._description = "SAFE: Force Safe override active (timers bypassed)"
-            else:
-                self._description = "SAFE: All groups report safe"
-        else:
-            self._is_safe = False
-            descriptions = [g.description for g in unsafe_groups]
-            self._description = "UNSAFE: " + " | ".join(descriptions)
+                return True, "SAFE: Force Safe override active (timers bypassed)"
+            return True, "SAFE: All groups report safe"
+        return False, "UNSAFE: " + " | ".join(g.description for g in unsafe_groups)
 
-        self._notify_listeners()
+    def diagnostics(self) -> dict[str, Any]:
+        """The state of the monitor, its groups and rules, for the diagnostics download."""
+        return {
+            "is_safe": self._is_safe,
+            "description": self._description,
+            "force_safe": self._force_safe,
+            "force_unsafe": self._force_unsafe,
+            "groups": [
+                {
+                    "name": group.name,
+                    "logic": group.logic,
+                    "settle_time": group.settle_time,
+                    "is_unsafe": group.is_unsafe,
+                    "boot_guard_complete": group.boot_guard_complete,
+                    "settle_ends_at": (
+                        group.settle_ends_at.isoformat() if group.settle_ends_at else None
+                    ),
+                    "description": group.description,
+                    "rules": [
+                        {
+                            "entity_id": rule.entity_id,
+                            "attribute": rule.attribute,
+                            "operator": rule.operator_str,
+                            "threshold": rule.threshold,
+                            "unsafe_delay": rule.unsafe_delay,
+                            "unavailable_delay": rule.unavailable_delay,
+                            "watchdog_timeout": rule.watchdog_timeout,
+                            "current_value": rule.current_value,
+                            "is_triggered": rule.is_triggered,
+                            "is_unsafe": rule.is_unsafe,
+                            "watchdog_expired": rule.watchdog_expired,
+                            "entity_available": rule.entity_available,
+                            "entity_initialized": rule.entity_initialized,
+                        }
+                        for rule in group.rules
+                    ],
+                }
+                for group in self._groups
+            ],
+        }
 
     # --- Override Controls ---
 

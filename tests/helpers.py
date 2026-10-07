@@ -32,14 +32,19 @@ class Timers:
         item["cb"](None)
 
 
-def rule(eid, op, thr, delay=0, watchdog=0):
-    return {
+def rule(eid, op, thr, delay=0, watchdog=0, attribute=None, grace=None):
+    result = {
         "entity_id": eid,
         "operator": op,
         "threshold": thr,
         "unsafe_delay": delay,
         "watchdog_timeout": watchdog,
     }
+    if attribute is not None:
+        result["attribute"] = attribute
+    if grace is not None:
+        result["unavailable_delay"] = grace
+    return result
 
 
 def grp(name, rules, logic="OR", settle=900, gid=None):
@@ -54,8 +59,8 @@ def grp(name, rules, logic="OR", settle=900, gid=None):
     return group
 
 
-def push(hass, coordinator, eid, value):
-    hass.states.set(eid, value)
+def push(hass, coordinator, eid, value, attributes=None):
+    hass.states.set(eid, value, attributes)
     coordinator._handle_state_change(
         Event({"entity_id": eid, "new_state": hass.states.get(eid)})
     )

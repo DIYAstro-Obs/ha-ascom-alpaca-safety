@@ -227,12 +227,11 @@ def test_device_information(make):
     assert dispatch(coordinator, "supportedactions")["Value"] == []
 
 
-def test_connected_is_set_by_put_and_a_bad_value_is_refused(make):
+def test_issafe_answers_without_a_connection(make):
+    """The server keeps Connected per client; a client that has not connected (for example after the
+    reload that saving the options causes) still gets its answer instead of an error."""
     _, coordinator, _ = make(GROUPS, {"sensor.x": "1"})
-    assert dispatch(coordinator, "connected") == {"Value": False}
-    assert dispatch(coordinator, "connected", {"Connected": "true"}) == {"Value": True}
-    assert dispatch(coordinator, "connected", {"Connected": "False"}) == {"Value": False}
-    assert dispatch(coordinator, "connected", {"Connected": "maybe"})["ErrorNumber"] == 0x400
+    assert dispatch(coordinator, "issafe") == {"Value": True}
 
 
 def test_an_unknown_action_is_an_error(make):

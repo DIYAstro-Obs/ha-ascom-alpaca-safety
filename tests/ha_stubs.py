@@ -98,9 +98,11 @@ class FakeHass:
         self.is_running = True
         self.data = {}
         self.listeners = []  # (event, callback) of async_listen and async_listen_once
+        self.events = []  # (event, data) of async_fire
         self.bus = types.SimpleNamespace(
             async_listen=self._listen,
             async_listen_once=self._listen,
+            async_fire=lambda event, data=None: self.events.append((event, data)),
         )
 
     def _listen(self, event, cb):
@@ -172,6 +174,10 @@ def install() -> None:
     class BinarySensorEntity:
         pass
 
+    class SensorEntity:
+        pass
+
+    components.sensor = _mod("homeassistant.components.sensor", SensorEntity=SensorEntity)
     components.binary_sensor = _mod(
         "homeassistant.components.binary_sensor",
         BinarySensorDeviceClass=types.SimpleNamespace(SAFETY="safety"),
