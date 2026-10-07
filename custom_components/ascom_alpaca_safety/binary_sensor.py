@@ -99,7 +99,7 @@ class SafetyMasterSensor(BinarySensorEntity):
         self._coordinator = coordinator
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{UNIQUE_ID_MASTER}"
-        self._attr_name = "Observatory Safe"
+        self._attr_name = "Observatory Safety"
         self._remove_listener = None
 
     @property

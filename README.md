@@ -58,7 +58,7 @@ Every start of the monitor begins with all groups **unsafe**: a restart of Home 
 ## Dashboard Entities
 
 The integration provides several entities for your Home Assistant dashboard:
-- **Master Safe Sensor**: A binary sensor showing the overall observatory safety status.
+- **Master Safety Sensor** ("Observatory Safety"): A binary sensor showing the overall observatory safety status. Like every Home Assistant safety sensor, **on means unsafe** and off means safe, shown as "Unsafe" and "Safe".
 - **Reason Sensor**: A text that says why the monitor is safe or unsafe (the description of the master state). A state holds 255 characters at most: the complete text is in the attribute `description`.
 - **Group Safe Sensors**: Individual binary sensors for each logical group. While a group settles, the attribute `settle_ends_at` holds the time it reports safe again (a time, not a countdown: the sensor is only written when something changes). The attribute `settle_remaining` of earlier versions is gone.
 - **Force Unsafe Switch**: Toggle to manually trigger an unsafe state (maintenance mode). It is stored: it stays on over restarts and reloads.

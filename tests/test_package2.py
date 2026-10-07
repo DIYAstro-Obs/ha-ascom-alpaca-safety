@@ -247,3 +247,11 @@ def test_removing_the_integration_removes_the_issues(make):
 
     asyncio.run(integration.async_remove_entry(hass, ENTRY))
     assert not FakeIssues.issues
+
+
+# ---- D6: the master sensor is named for what it is (on = unsafe) ---------------------------------------------------
+def test_the_master_sensor_is_called_safety_not_safe(make):
+    """The name decides the entity id: "Observatory Safe" with the state "Unsafe" was misleading."""
+    _, coordinator, _ = make([grp("g", [rule("sensor.x", ">", 5)])], {"sensor.x": "1"})
+    sensor = binary_sensor.SafetyMasterSensor(coordinator, types.SimpleNamespace(entry_id="E"))
+    assert sensor._attr_name == "Observatory Safety"
