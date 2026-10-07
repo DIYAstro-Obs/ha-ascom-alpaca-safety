@@ -90,6 +90,25 @@ def test_attribute_choices_leave_out_the_attributes_every_entity_has():
     assert rules.attribute_choices({}, "wind_speed") == ["wind_speed"]
 
 
+def test_attribute_choices_leave_out_the_attributes_that_only_describe_a_unit_or_the_entity():
+    """A weather entity has "temperature_unit" next to "temperature", a sensor has a device class: no rule makes sense on them."""
+    weather = {
+        "temperature": 16.3, "temperature_unit": "°C", "pressure_unit": "hPa", "wind_speed": 5.4,
+        "wind_speed_unit": "km/h", "precipitation_unit": "mm", "visibility_unit": "km", "wind_bearing": 23,
+        "friendly_name": "Home", "supported_features": 3,
+    }
+    assert rules.attribute_choices(weather) == ["temperature", "wind_bearing", "wind_speed"]
+
+    sensor = {"friendly_name": "Dew point", "device_class": "temperature", "state_class": "measurement",
+              "unit_of_measurement": "°C", "icon": "mdi:thermometer"}
+    assert rules.attribute_choices(sensor) == []  # nothing else to watch: the dialog skips the step
+
+
+def test_a_stored_unit_attribute_stays_in_the_list():
+    """A rule that already watches such an attribute must not lose it when it is edited."""
+    assert rules.attribute_choices({"temperature_unit": "°C"}, "temperature_unit") == ["temperature_unit"]
+
+
 # ---- B13: rules on an attribute in the coordinator ---------------------------------------------------------
 WEATHER = "weather.home"
 

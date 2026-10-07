@@ -37,8 +37,18 @@ LIST_OPERATORS = (OPERATOR_IN, OPERATOR_NOT_IN)
 # States of an entity that has no value (the rule counts as unsafe)
 UNAVAILABLE_STATES = ("unavailable", "unknown")
 
-# Attributes every entity has: nothing to watch there
-_UNINTERESTING_ATTRIBUTES = ("friendly_name", "icon", "entity_picture", "supported_features", "attribution")
+# Attributes that only describe the entity or the unit of a value (name, icon, device class, "unit_of_measurement",
+# and the "..._unit" attributes of a weather entity): nothing to watch there
+_UNINTERESTING_ATTRIBUTES = (
+    "friendly_name",
+    "icon",
+    "entity_picture",
+    "supported_features",
+    "attribution",
+    "device_class",
+    "state_class",
+    "unit_of_measurement",
+)
 
 # Entities that only know the states "on" and "off"
 ON_OFF_DOMAINS = ("binary_sensor", "switch", "input_boolean", "light")
@@ -221,7 +231,7 @@ def attribute_choices(attributes: Mapping[str, Any] | None, current: str = "") -
     names = {
         name
         for name in (attributes or {})
-        if name not in _UNINTERESTING_ATTRIBUTES
+        if name not in _UNINTERESTING_ATTRIBUTES and not name.endswith("_unit")
     }
     if current:
         names.add(current)

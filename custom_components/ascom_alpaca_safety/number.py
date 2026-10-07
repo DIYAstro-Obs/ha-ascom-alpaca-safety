@@ -52,7 +52,7 @@ class ManualSafeDurationNumber(NumberEntity):
         self._coordinator = coordinator
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{UNIQUE_ID_MANUAL_SAFE_DURATION}"
-        self._attr_name = "Manual Safe Duration (0 = until switched off)"
+        self._attr_name = "Manual Safe Duration"
         self._attr_icon = "mdi:timer-outline"
         self._remove_listener = None
 

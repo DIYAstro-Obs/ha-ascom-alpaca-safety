@@ -344,6 +344,12 @@ def test_the_duration_number(make):
     assert entity.native_value == 6
 
 
+def test_the_duration_has_a_short_name(make):
+    """The name is part of the entity id: a hint like "(0 = until switched off)" made it very long."""
+    _, coordinator, _ = make(GROUPS, {"sensor.x": "9"})
+    assert number.ManualSafeDurationNumber(coordinator, ENTRY)._attr_name == "Manual Safe Duration"
+
+
 def test_the_entities_have_their_own_unique_ids(make):
     _, coordinator, _ = make(GROUPS, {"sensor.x": "9"})
     ids = {
