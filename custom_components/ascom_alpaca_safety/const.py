@@ -8,8 +8,8 @@ ALPACA_SERVER_API_KEY = "ascom_alpaca_server_api"  # hass.data key for the Serve
 ALPACA_SERVER_COMPONENT = "ascom_alpaca_server"  # Server's actual HA component domain
 
 # --- Timer Defaults (seconds) ---
-DEFAULT_SETTLE_TIME = 900  # 15 minutes
-DEFAULT_WATCHDOG_TIMEOUT = 300  # 5 minutes
+DEFAULT_SETTLE_TIME = 300  # 5 minutes (per group, 0 = no waiting)
+DEFAULT_WATCHDOG_TIMEOUT = 300  # 5 minutes, for entities that report regularly (see rules.py)
 DEFAULT_UNSAFE_DELAY = 0  # no delay by default
 
 # --- Configuration Keys ---
@@ -64,6 +64,15 @@ UNIQUE_ID_MASTER = "master_safe"
 UNIQUE_ID_GROUP_PREFIX = "group_"
 UNIQUE_ID_FORCE_UNSAFE = "force_unsafe"
 UNIQUE_ID_FORCE_SAFE = "force_safe"
+
+# --- Storage (state that has to survive a restart or reload) ---
+STORAGE_VERSION = 1
+STORAGE_KEY_FORCE_UNSAFE = "force_unsafe"
+
+
+def storage_key(entry_id: str) -> str:
+    """Name of the storage file of a config entry."""
+    return f"{DOMAIN}.{entry_id}"
 
 # --- Platforms ---
 PLATFORMS = ["binary_sensor", "switch", "button"]

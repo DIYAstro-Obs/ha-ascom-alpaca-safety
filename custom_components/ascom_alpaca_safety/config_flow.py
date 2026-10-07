@@ -27,12 +27,19 @@ from .const import (
     CONF_RULES,
     DEFAULT_SETTLE_TIME,
     DEFAULT_UNSAFE_DELAY,
-    DEFAULT_WATCHDOG_TIMEOUT,
     DOMAIN,
     LOGIC_AND,
     LOGIC_OR,
     OPERATOR_LABELS,
     OPERATORS,
+)
+from .rules import (
+    default_watchdog_timeout,
+    group_name_error,
+    operators_for,
+    rule_triggered,
+    threshold_choices,
+    threshold_error,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,7 +85,8 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
         self._config_entry = config_entry
         self._groups: list[dict[str, Any]] = []
         self._current_group_index: int | None = None
-        self._current_rule_index: int | None = None
+        self._current_rule_index: int | None = None  # None while a rule is added
+        self._rule_entity: str | None = None  # chosen in the first step of a rule
 
     def _load_groups(self) -> None:
         """Load current groups from options."""
@@ -110,7 +118,17 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
         except Exception:
             pass
 
-        return f"{friendly_name}  {op_str}  {threshold}"
+        # What the rule says right now: helps to see at a glance whether a rule is right
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            now = f"{state.state if state else 'missing'} -> UNSAFE"
+        else:
+            now = f"{state.state} -> " + (
+                "safe"
+                if rule_triggered(op_str, threshold, state.state) is False
+                else "UNSAFE"
+            )
+        return f"{friendly_name}  {op_str}  {threshold}   [now {now}]"
 
     def _save_options(self) -> dict[str, Any]:
         """Build the complete options dict."""
@@ -177,13 +195,9 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             name = user_input.get(CONF_GROUP_NAME, "").strip()
-            if not name:
-                errors[CONF_GROUP_NAME] = "Name is required"
-            elif any(
-                g.get(CONF_GROUP_NAME, "").lower() == name.lower()
-                for g in self._groups
-            ):
-                errors[CONF_GROUP_NAME] = "A group with this name already exists"
+            name_error = self._group_name_error(name)
+            if name_error:
+                errors[CONF_GROUP_NAME] = name_error
             else:
                 new_group = {
                     CONF_GROUP_ID: uuid.uuid4().hex[:8],
@@ -252,7 +266,8 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             choice = user_input.get("menu")
             if choice == "add_rule":
-                return await self.async_step_add_rule()
+                self._current_rule_index = None
+                return await self.async_step_rule_entity()
             if choice == "edit_group_settings":
                 return await self.async_step_edit_group_settings()
             if choice == "delete_group":
@@ -264,7 +279,7 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
                 try:
                     r_idx = int(choice.replace("edit_rule_", ""))
                     self._current_rule_index = r_idx
-                    return await self.async_step_edit_rule()
+                    return await self.async_step_rule_entity()
                 except (ValueError, IndexError):
                     pass
             if choice and choice.startswith("delete_rule_"):
@@ -289,7 +304,12 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
             menu_options[f"delete_rule_{i}"] = f"🗑️ Delete: {label}"
 
         menu_options["delete_group"] = "🗑️ Delete this group"
-        menu_options["back"] = "💾 Save & Back"
+        if any(not g.get(CONF_RULES) for g in self._groups):
+            menu_options["back"] = (
+                "💾 Save & Close (a group without rules reports UNSAFE)"
+            )
+        else:
+            menu_options["back"] = "💾 Save & Close"
 
         return self.async_show_form(
             step_id="edit_group",
@@ -321,29 +341,37 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
 
         group = self._groups[idx]
 
+        errors: dict[str, str] = {}
         if user_input is not None:
-            group[CONF_GROUP_NAME] = user_input.get(
-                CONF_GROUP_NAME, group[CONF_GROUP_NAME]
-            )
-            group[CONF_GROUP_LOGIC] = user_input.get(
-                CONF_GROUP_LOGIC, group[CONF_GROUP_LOGIC]
-            )
-            group[CONF_GROUP_SETTLE_TIME] = int(
-                user_input.get(CONF_GROUP_SETTLE_TIME, group[CONF_GROUP_SETTLE_TIME])
-            )
-            return await self.async_step_edit_group()
+            name = user_input.get(CONF_GROUP_NAME, "").strip()
+            name_error = self._group_name_error(name, skip_index=idx)
+            if name_error:
+                errors[CONF_GROUP_NAME] = name_error
+            else:
+                group[CONF_GROUP_NAME] = name
+                group[CONF_GROUP_LOGIC] = user_input.get(
+                    CONF_GROUP_LOGIC, group[CONF_GROUP_LOGIC]
+                )
+                group[CONF_GROUP_SETTLE_TIME] = int(
+                    user_input.get(
+                        CONF_GROUP_SETTLE_TIME, group[CONF_GROUP_SETTLE_TIME]
+                    )
+                )
+                return await self.async_step_edit_group()
 
+        shown = user_input or group
         return self.async_show_form(
             step_id="edit_group_settings",
+            errors=errors or None,
             data_schema=vol.Schema(
                 {
                     vol.Required(
                         CONF_GROUP_NAME,
-                        default=group.get(CONF_GROUP_NAME, ""),
+                        default=shown.get(CONF_GROUP_NAME, ""),
                     ): selector.TextSelector(),
                     vol.Required(
                         CONF_GROUP_LOGIC,
-                        default=group.get(CONF_GROUP_LOGIC, LOGIC_OR),
+                        default=shown.get(CONF_GROUP_LOGIC, LOGIC_OR),
                     ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=[
@@ -361,7 +389,7 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
                     ),
                     vol.Required(
                         CONF_GROUP_SETTLE_TIME,
-                        default=group.get(CONF_GROUP_SETTLE_TIME, DEFAULT_SETTLE_TIME),
+                        default=shown.get(CONF_GROUP_SETTLE_TIME, DEFAULT_SETTLE_TIME),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=0,
@@ -375,79 +403,78 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
             ),
         )
 
-    # ---- Add Rule ----
+    # ---- Add / edit a rule: first the entity, then the details ----
 
-    async def async_step_add_rule(
+    async def async_step_rule_entity(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Add a new rule to the current group."""
-        idx = self._current_group_index
-        if idx is None or idx >= len(self._groups):
+        """Step 1 of a rule: choose the entity. The next step shows its state and offers its states."""
+        group = self._current_group()
+        if group is None:
             return await self.async_step_init()
 
         if user_input is not None:
-            rule = {
-                CONF_RULE_ENTITY: user_input.get(CONF_RULE_ENTITY, ""),
-                CONF_RULE_OPERATOR: user_input.get(CONF_RULE_OPERATOR, ">"),
-                CONF_RULE_THRESHOLD: str(user_input.get(CONF_RULE_THRESHOLD, "0")),
-                CONF_RULE_UNSAFE_DELAY: int(
-                    user_input.get(CONF_RULE_UNSAFE_DELAY, DEFAULT_UNSAFE_DELAY)
-                ),
-                CONF_RULE_WATCHDOG_TIMEOUT: int(
-                    user_input.get(
-                        CONF_RULE_WATCHDOG_TIMEOUT, DEFAULT_WATCHDOG_TIMEOUT
-                    )
-                ),
-            }
-            self._groups[idx].setdefault(CONF_RULES, []).append(rule)
-            return await self.async_step_edit_group()
+            self._rule_entity = user_input[CONF_RULE_ENTITY]
+            return await self.async_step_rule_details()
+
+        rule = self._current_rule(group)
+        entity_kwargs: dict[str, Any] = {}
+        if rule and rule.get(CONF_RULE_ENTITY):
+            entity_kwargs["default"] = rule[CONF_RULE_ENTITY]
 
         return self.async_show_form(
-            step_id="add_rule",
-            data_schema=self._rule_schema(),
+            step_id="rule_entity",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_RULE_ENTITY, **entity_kwargs
+                    ): selector.EntitySelector(),
+                }
+            ),
+            description_placeholders={
+                "group_name": group.get(CONF_GROUP_NAME, "Unnamed")
+            },
         )
 
-    # ---- Edit Rule ----
-
-    async def async_step_edit_rule(
+    async def async_step_rule_details(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Edit an existing rule."""
-        g_idx = self._current_group_index
-        r_idx = self._current_rule_index
-        if (
-            g_idx is None
-            or g_idx >= len(self._groups)
-            or r_idx is None
-            or r_idx >= len(self._groups[g_idx].get(CONF_RULES, []))
-        ):
-            return await self.async_step_edit_group()
+        """Step 2 of a rule: operator, threshold, delay and watchdog, for the chosen entity."""
+        group = self._current_group()
+        entity_id = self._rule_entity
+        if group is None or not entity_id:
+            return await self.async_step_rule_entity()
 
-        rule = self._groups[g_idx][CONF_RULES][r_idx]
-
+        rule = self._current_rule(group)
+        errors: dict[str, str] = {}
         if user_input is not None:
-            rule[CONF_RULE_ENTITY] = user_input.get(
-                CONF_RULE_ENTITY, rule[CONF_RULE_ENTITY]
-            )
-            rule[CONF_RULE_OPERATOR] = user_input.get(
-                CONF_RULE_OPERATOR, rule[CONF_RULE_OPERATOR]
-            )
-            rule[CONF_RULE_THRESHOLD] = str(
-                user_input.get(CONF_RULE_THRESHOLD, rule[CONF_RULE_THRESHOLD])
-            )
-            rule[CONF_RULE_UNSAFE_DELAY] = int(
-                user_input.get(CONF_RULE_UNSAFE_DELAY, rule[CONF_RULE_UNSAFE_DELAY])
-            )
-            rule[CONF_RULE_WATCHDOG_TIMEOUT] = int(
-                user_input.get(
-                    CONF_RULE_WATCHDOG_TIMEOUT, rule[CONF_RULE_WATCHDOG_TIMEOUT]
-                )
-            )
-            return await self.async_step_edit_group()
+            values = {**user_input, CONF_RULE_ENTITY: entity_id}
+            errors = self._rule_errors(values)
+            if not errors:
+                new_rule = self._rule_from_input(values)
+                if rule is not None:
+                    rule.update(new_rule)
+                else:
+                    group.setdefault(CONF_RULES, []).append(new_rule)
+                return await self.async_step_edit_group()
 
+        # Show what the user typed after an error; when editing the same entity: the stored rule
+        if user_input is not None:
+            defaults = user_input
+        elif rule is not None and rule.get(CONF_RULE_ENTITY) == entity_id:
+            defaults = rule
+        else:
+            defaults = {}
+
+        state = self.hass.states.get(entity_id)
         return self.async_show_form(
-            step_id="edit_rule",
-            data_schema=self._rule_schema(defaults=rule),
+            step_id="rule_details",
+            data_schema=self._rule_details_schema(entity_id, state, defaults),
+            errors=errors or None,
+            description_placeholders={
+                "entity_id": entity_id,
+                "current_state": self._state_text(state),
+            },
         )
 
     # ---- Delete Group ----
@@ -518,26 +545,116 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
 
     # ---- Helpers ----
 
-    def _rule_schema(
-        self, defaults: dict[str, Any] | None = None
-    ) -> vol.Schema:
-        """Build the schema for adding/editing a rule."""
-        d = defaults or {}
+    @staticmethod
+    def _rule_errors(user_input: dict[str, Any]) -> dict[str, str]:
+        """Reject a rule that can never work (threshold that cannot match the operator or entity)."""
+        error = threshold_error(
+            user_input.get(CONF_RULE_ENTITY, ""),
+            user_input.get(CONF_RULE_OPERATOR, ">"),
+            user_input.get(CONF_RULE_THRESHOLD, ""),
+        )
+        return {CONF_RULE_THRESHOLD: error} if error else {}
 
+    @staticmethod
+    def _rule_from_input(user_input: dict[str, Any]) -> dict[str, Any]:
+        """Build the stored rule from the form input.
+
+        An empty watchdog field gets the default of the entity type: 300 s for sensors and
+        weather, off for everything that only reports when it changes (binary sensors, switches, ...).
+        """
+        entity_id = user_input.get(CONF_RULE_ENTITY, "")
+        watchdog = user_input.get(CONF_RULE_WATCHDOG_TIMEOUT)
+        return {
+            CONF_RULE_ENTITY: entity_id,
+            CONF_RULE_OPERATOR: user_input.get(CONF_RULE_OPERATOR, ">"),
+            CONF_RULE_THRESHOLD: str(user_input.get(CONF_RULE_THRESHOLD, "0")).strip(),
+            CONF_RULE_UNSAFE_DELAY: int(
+                user_input.get(CONF_RULE_UNSAFE_DELAY, DEFAULT_UNSAFE_DELAY)
+            ),
+            CONF_RULE_WATCHDOG_TIMEOUT: (
+                default_watchdog_timeout(entity_id)
+                if watchdog in (None, "")
+                else int(watchdog)
+            ),
+        }
+
+    def _current_group(self) -> dict[str, Any] | None:
+        idx = self._current_group_index
+        if idx is None or idx >= len(self._groups):
+            return None
+        return self._groups[idx]
+
+    def _current_rule(self, group: dict[str, Any]) -> dict[str, Any] | None:
+        """The rule that is edited, or None while a rule is added."""
+        r_idx = self._current_rule_index
+        rules = group.get(CONF_RULES, [])
+        if r_idx is None or r_idx >= len(rules):
+            return None
+        return rules[r_idx]
+
+    def _group_name_error(self, name: str, skip_index: int | None = None) -> str | None:
+        """Name of a group: not empty, not used by another group."""
+        others = [
+            group.get(CONF_GROUP_NAME, "")
+            for i, group in enumerate(self._groups)
+            if i != skip_index
+        ]
+        return group_name_error(name, others)
+
+    @staticmethod
+    def _state_text(state: Any) -> str:
+        """The current state of the entity for the form text."""
+        if state is None:
+            return "none (the entity does not exist or has no state yet)"
+        unit = state.attributes.get("unit_of_measurement")
+        return f"{state.state} {unit}" if unit else str(state.state)
+
+    @staticmethod
+    def _rule_details_schema(
+        entity_id: str, state: Any, defaults: dict[str, Any]
+    ) -> vol.Schema:
+        """Schema of the second rule step: the choices follow the entity (on/off, weather, selects)."""
+        allowed = operators_for(entity_id)
         operator_options = [
             selector.SelectOptionDict(value=o, label=OPERATOR_LABELS[o])
             for o in OPERATORS
+            if allowed is None or o in allowed
         ]
+        operator_default = defaults.get(CONF_RULE_OPERATOR)
+        if operator_default not in [o["value"] for o in operator_options]:
+            operator_default = operator_options[0]["value"] if allowed else ">"
+
+        choices = threshold_choices(entity_id, state.attributes if state else None)
+        threshold_default = str(defaults.get(CONF_RULE_THRESHOLD, "")).strip()
+        if choices is not None:
+            options, free_text = choices
+            if not free_text:
+                # on / off only: the stored value in the spelling of the list
+                threshold_default = threshold_default.casefold()
+            if not threshold_default or (not free_text and threshold_default not in options):
+                threshold_default = options[0]
+            threshold_selector: Any = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=options,
+                    custom_value=free_text,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        else:
+            threshold_default = threshold_default or "0"
+            threshold_selector = selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+            )
+
+        # No default when adding a rule: left empty the watchdog becomes the default of the entity type
+        watchdog_kwargs: dict[str, Any] = {}
+        if defaults.get(CONF_RULE_WATCHDOG_TIMEOUT) not in (None, ""):
+            watchdog_kwargs["default"] = defaults[CONF_RULE_WATCHDOG_TIMEOUT]
 
         return vol.Schema(
             {
                 vol.Required(
-                    CONF_RULE_ENTITY,
-                    default=d.get(CONF_RULE_ENTITY, ""),
-                ): selector.EntitySelector(),
-                vol.Required(
-                    CONF_RULE_OPERATOR,
-                    default=d.get(CONF_RULE_OPERATOR, ">"),
+                    CONF_RULE_OPERATOR, default=operator_default
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=operator_options,
@@ -545,14 +662,11 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
                     )
                 ),
                 vol.Required(
-                    CONF_RULE_THRESHOLD,
-                    default=d.get(CONF_RULE_THRESHOLD, "0"),
-                ): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
-                ),
+                    CONF_RULE_THRESHOLD, default=threshold_default
+                ): threshold_selector,
                 vol.Optional(
                     CONF_RULE_UNSAFE_DELAY,
-                    default=d.get(CONF_RULE_UNSAFE_DELAY, DEFAULT_UNSAFE_DELAY),
+                    default=defaults.get(CONF_RULE_UNSAFE_DELAY, DEFAULT_UNSAFE_DELAY),
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,
@@ -563,10 +677,7 @@ class AlpacaSafetyOptionsFlow(config_entries.OptionsFlow):
                     )
                 ),
                 vol.Optional(
-                    CONF_RULE_WATCHDOG_TIMEOUT,
-                    default=d.get(
-                        CONF_RULE_WATCHDOG_TIMEOUT, DEFAULT_WATCHDOG_TIMEOUT
-                    ),
+                    CONF_RULE_WATCHDOG_TIMEOUT, **watchdog_kwargs
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,

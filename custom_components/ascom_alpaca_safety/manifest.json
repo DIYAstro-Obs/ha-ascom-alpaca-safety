@@ -7,6 +7,7 @@
   ],
   "config_flow": true,
   "dependencies": [],
+  "after_dependencies": ["ascom_alpaca_server"],
   "documentation": "https://github.com/DIYAstro-Obs/ha-ascom-alpaca-safety",
   "homeassistant": "2026.2.0",
   "integration_type": "hub",

@@ -14,10 +14,13 @@
         "step": {
             "init": {
                 "title": "ASCOM Alpaca Safety Configuration",
-                "description": "Manage safety groups and rules.",
+                "description": "Manage safety groups and rules. Saving restarts the monitor: afterwards the settle time of each group applies before it reports safe again (default 300 s, 0 = no waiting).",
                 "menu_options": {
                     "add_group": "Add new group",
                     "edit_group": "Edit group: {group_name}"
+                },
+                "data": {
+                    "menu": "Safety groups"
                 }
             },
             "add_group": {
@@ -30,17 +33,20 @@
                 "data_description": {
                     "group_name": "A unique name for this safety group (e.g., Weather, Moon)",
                     "group_logic": "OR = any rule triggers unsafe. AND = all rules must trigger.",
-                    "settle_time": "Time in seconds the group must remain safe before recovery."
+                    "settle_time": "Time in seconds the group must remain safe before recovery (default 300, 0 = no waiting). It also applies after every restart and after saving the options."
                 }
             },
             "edit_group": {
                 "title": "Edit Group: {group_name}",
-                "description": "Manage rules in this group.",
+                "description": "Manage rules in this group. 'Save & Close' stores the changes and restarts the monitor; closing this dialog with the X discards them.",
                 "menu_options": {
                     "add_rule": "Add new rule",
                     "edit_group_settings": "Edit group settings",
                     "delete_group": "Delete this group",
                     "edit_rule": "Edit rule: {rule_entity}"
+                },
+                "data": {
+                    "menu": "Action"
                 }
             },
             "edit_group_settings": {
@@ -51,41 +57,57 @@
                     "settle_time": "Settle Time (seconds)"
                 }
             },
-            "add_rule": {
-                "title": "Add Rule",
+            "delete_group": {
+                "title": "Delete Group",
+                "description": "Are you sure you want to delete the group '{group_name}' and all its rules?",
                 "data": {
-                    "entity_id": "Entity",
+                    "confirm": "Yes, delete this group"
+                }
+            },
+            "delete_rule": {
+                "title": "Delete Rule",
+                "description": "Are you sure you want to delete the rule for entity '{rule_entity}'?",
+                "data": {
+                    "confirm": "Yes, delete this rule"
+                }
+            },
+            "rule_entity": {
+                "title": "Rule: choose the entity",
+                "description": "Group '{group_name}'. Choose the entity this rule watches. The next step shows its current state.",
+                "data": {
+                    "entity_id": "Entity"
+                },
+                "data_description": {
+                    "entity_id": "The Home Assistant entity to monitor."
+                }
+            },
+            "rule_details": {
+                "title": "Rule: when is it unsafe?",
+                "description": "Entity {entity_id}, current state: {current_state}. A rule describes the UNSAFE condition, for example a rain sensor == on.",
+                "data": {
                     "operator": "Operator",
                     "threshold": "Threshold Value",
                     "unsafe_delay": "Unsafe Delay (seconds)",
                     "watchdog_timeout": "Watchdog Timeout (seconds)"
                 },
                 "data_description": {
-                    "entity_id": "The Home Assistant entity to monitor.",
                     "operator": "Comparison operator for the threshold check.",
-                    "threshold": "The value to compare the entity state against.",
+                    "threshold": "The value to compare the entity state against. Numbers for > < >= <=; on or off for binary sensors, switches and lights; the states of weather entities and of selects are offered; other states are compared without regard to upper or lower case.",
                     "unsafe_delay": "Ignore brief spikes shorter than this (0 = instant).",
-                    "watchdog_timeout": "Mark unsafe if entity not updated within this time (0 = disabled)."
+                    "watchdog_timeout": "Mark unsafe if the entity has not reported within this time (0 = off). Leave empty: 300 s for sensors and weather, off for everything else (binary sensors, switches and helpers only report when they change)."
                 }
-            },
-            "edit_rule": {
-                "title": "Edit Rule",
-                "data": {
-                    "entity_id": "Entity",
-                    "operator": "Operator",
-                    "threshold": "Threshold Value",
-                    "unsafe_delay": "Unsafe Delay (seconds)",
-                    "watchdog_timeout": "Watchdog Timeout (seconds)"
-                }
-            },
-            "delete_group": {
-                "title": "Delete Group",
-                "description": "Are you sure you want to delete the group '{group_name}' and all its rules?"
-            },
-            "delete_rule": {
-                "title": "Delete Rule",
-                "description": "Are you sure you want to delete the rule for entity '{rule_entity}'?"
             }
+        },
+        "error": {
+            "threshold_not_numeric": "This operator compares numbers: enter a number as the threshold.",
+            "threshold_not_on_off": "This entity only reports on or off: enter on or off as the threshold.",
+            "operator_not_for_on_off": "This entity only reports on or off: use Equal (==) or Not equal (!=)."
+        }
+    },
+    "issues": {
+        "missing_entity": {
+            "title": "Safety rule: entity not found",
+            "description": "The rule in group(s) {groups} monitors {entity_id}, but this entity does not exist or is disabled. The rule reports UNSAFE until you fix or delete it (Settings, Devices & services, ASCOM Alpaca Safety, Configure)."
         }
     }
 }

@@ -36,6 +36,51 @@ class Event:
         self.data = data
 
 
+def callback(func):
+    """Like Home Assistant's @callback: marks a function as safe to run in the event loop.
+
+    Home Assistant runs a function WITHOUT this mark in a worker thread (see is_callback).
+    """
+    func._hass_callback = True
+    return func
+
+
+def is_callback(func) -> bool:
+    return getattr(func, "_hass_callback", False)
+
+
+class FakeIssues:
+    """In-memory stand-in for the issue registry (class-level data = "the registry")."""
+
+    issues: dict = {}
+
+
+def _async_create_issue(hass, domain, issue_id, **kwargs):
+    FakeIssues.issues[(domain, issue_id)] = kwargs
+
+
+def _async_delete_issue(hass, domain, issue_id):
+    FakeIssues.issues.pop((domain, issue_id), None)
+
+
+class FakeStore:
+    """In-memory stand-in for homeassistant.helpers.storage.Store (class-level data = "the disk")."""
+
+    saved: dict = {}
+
+    def __init__(self, hass, version, key):
+        self.key = key
+
+    async def async_load(self):
+        return FakeStore.saved.get(self.key)
+
+    def async_delay_save(self, data_func, delay=0):
+        FakeStore.saved[self.key] = data_func()
+
+    async def async_remove(self):
+        FakeStore.saved.pop(self.key, None)
+
+
 class FakeStates:
     def __init__(self):
         self._states = {}
@@ -50,9 +95,17 @@ class FakeStates:
 class FakeHass:
     def __init__(self):
         self.states = FakeStates()
+        self.is_running = True
+        self.data = {}
+        self.listeners = []  # (event, callback) of async_listen and async_listen_once
         self.bus = types.SimpleNamespace(
-            async_listen_once=lambda event, cb: (lambda: None)
+            async_listen=self._listen,
+            async_listen_once=self._listen,
         )
+
+    def _listen(self, event, cb):
+        self.listeners.append((event, cb))
+        return lambda: None
 
 
 def install() -> None:
@@ -67,7 +120,7 @@ def install() -> None:
         Event=Event,
         HomeAssistant=object,
         State=FakeState,
-        callback=lambda func: func,
+        callback=callback,
     )
     helpers = _mod("homeassistant.helpers")
     helpers.event = _mod(
@@ -75,6 +128,14 @@ def install() -> None:
         async_call_later=None,
         async_track_state_change_event=None,
         async_track_time_interval=None,
+    )
+    helpers.storage = _mod("homeassistant.helpers.storage", Store=FakeStore)
+    helpers.issue_registry = _mod(
+        "homeassistant.helpers.issue_registry",
+        async_create_issue=_async_create_issue,
+        async_delete_issue=_async_delete_issue,
+        async_get=lambda hass: types.SimpleNamespace(issues=FakeIssues.issues),
+        IssueSeverity=types.SimpleNamespace(WARNING="warning"),
     )
     helpers.entity = _mod(
         "homeassistant.helpers.entity",
@@ -95,7 +156,9 @@ def install() -> None:
 
     util = _mod("homeassistant.util")
     util.dt = _mod(
-        "homeassistant.util.dt", utcnow=lambda: datetime.now(timezone.utc)
+        "homeassistant.util.dt",
+        utcnow=lambda: datetime.now(timezone.utc),
+        as_local=lambda value: value,
     )
     ha.util = util
 

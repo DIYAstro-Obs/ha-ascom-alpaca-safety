@@ -195,7 +195,11 @@ class SafetyGroupSensor(BinarySensorEntity):
         attrs: dict[str, str | float | None] = {
             "description": gs.description,
             "logic": gs.logic,
-            "settle_remaining": gs.settle_remaining,
+            # an end time instead of the remaining seconds: the state is only written on events,
+            # so a countdown would stand still
+            "settle_ends_at": (
+                gs.settle_ends_at.isoformat() if gs.settle_ends_at else None
+            ),
             "boot_guard_complete": str(gs.boot_guard_complete),
         }
         return attrs

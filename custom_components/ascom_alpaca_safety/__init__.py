@@ -12,6 +12,7 @@ from homeassistant.components.persistent_notification import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 
 from .const import (
     ALPACA_SERVER_API_KEY,
@@ -25,8 +26,10 @@ from .const import (
     SAFETY_DEVICE_NAME,
     SAFETY_DEVICE_TYPE,
     SAFETY_DRIVER_VERSION,
+    STORAGE_VERSION,
+    storage_key,
 )
-from .coordinator import SafetyCoordinator
+from .coordinator import SafetyCoordinator, delete_missing_entity_issues
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -118,6 +121,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the stored state (Force Unsafe) and the repair issues when the integration is removed."""
+    await Store(hass, STORAGE_VERSION, storage_key(entry.entry_id)).async_remove()
+    delete_missing_entity_issues(hass)
+
+
 async def _async_update_listener(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
@@ -140,6 +149,12 @@ async def _try_register_with_server(
     if server_api is None or "async_register_device" not in server_api:
         return False
 
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if entry_data is None:
+        return False  # the entry was unloaded in the meantime
+    if DATA_SERVER_UNREGISTER in entry_data:
+        return True  # already registered
+
     # Build the request handler callback
     async def handle_alpaca_request(
         action: str, params: dict[str, Any] | None = None
@@ -153,7 +168,11 @@ async def _try_register_with_server(
             device_name=SAFETY_DEVICE_NAME,
             handler=handle_alpaca_request,
         )
-        hass.data[DOMAIN][entry.entry_id][DATA_SERVER_UNREGISTER] = unregister
+        if hass.data.get(DOMAIN, {}).get(entry.entry_id) is not entry_data:
+            # unloaded while the registration ran: do not leave the device behind without an owner
+            unregister()
+            return False
+        entry_data[DATA_SERVER_UNREGISTER] = unregister
         _LOGGER.info("Registered SafetyMonitor with ASCOM Alpaca Server")
 
         # Dismiss any previous "server missing" notification
@@ -205,29 +224,36 @@ def _listen_for_server(
                 _try_register_with_server(hass, coordinator, entry)
             )
         else:
-            _LOGGER.warning(
-                "ASCOM Alpaca Server not found after HA startup. "
-                "Safety runs in standalone mode."
-            )
-            async_create(
-                hass,
-                (
-                    "ASCOM Alpaca Safety is running in **standalone mode**. "
-                    "All Home Assistant entities work normally.\n\n"
-                    "To expose the Safety Monitor via the ASCOM/Alpaca API, "
-                    "install and configure the **ASCOM Alpaca Server** integration."
-                ),
-                title="ASCOM Alpaca Safety — Server Not Found",
-                notification_id=f"{DOMAIN}_server_missing",
-            )
+            _notify_server_missing(hass)
 
-    # Listen for component loads and HA started
+    # Listen for the Server to load (also when it is added later)
     entry_data = hass.data[DOMAIN][entry.entry_id]
     entry_data[_DATA_COMPONENT_UNSUB] = hass.bus.async_listen(
         "component_loaded", _on_component_loaded
     )
-    entry_data[_DATA_STARTED_UNSUB] = hass.bus.async_listen_once(
-        EVENT_HOMEASSISTANT_STARTED, _on_ha_started
+    if hass.is_running:
+        # HA started long ago (Safety was added or reloaded now) and the Server is not there: say so
+        # at once, the "started" event does not fire again
+        _notify_server_missing(hass)
+    else:
+        entry_data[_DATA_STARTED_UNSUB] = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, _on_ha_started
+        )
+
+
+def _notify_server_missing(hass: HomeAssistant) -> None:
+    """Tell the user that Safety runs without the Server (no Alpaca SafetyMonitor)."""
+    _LOGGER.warning("ASCOM Alpaca Server not found. Safety runs in standalone mode.")
+    async_create(
+        hass,
+        (
+            "ASCOM Alpaca Safety is running in **standalone mode**. "
+            "All Home Assistant entities work normally.\n\n"
+            "To expose the Safety Monitor via the ASCOM/Alpaca API, "
+            "install and configure the **ASCOM Alpaca Server** integration."
+        ),
+        title="ASCOM Alpaca Safety — Server Not Found",
+        notification_id=f"{DOMAIN}_server_missing",
     )
 
 

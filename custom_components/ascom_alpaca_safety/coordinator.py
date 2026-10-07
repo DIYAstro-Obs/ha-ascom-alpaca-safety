@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import operator as op
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -21,7 +20,9 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
-from datetime import timedelta
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.storage import Store
+from datetime import datetime, timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import dt as dt_util
 
@@ -39,28 +40,37 @@ from .const import (
     CONF_RULES,
     DEFAULT_SETTLE_TIME,
     DEFAULT_UNSAFE_DELAY,
-    DEFAULT_WATCHDOG_TIMEOUT,
+    DOMAIN,
     LOGIC_AND,
     LOGIC_OR,
-    OPERATOR_EQ,
     OPERATOR_GT,
-    OPERATOR_GTE,
-    OPERATOR_LT,
-    OPERATOR_LTE,
-    OPERATOR_NEQ,
+    STORAGE_KEY_FORCE_UNSAFE,
+    STORAGE_VERSION,
+    storage_key,
 )
+from .rules import default_watchdog_timeout, rule_triggered
 
 _LOGGER = logging.getLogger(__name__)
 
-# Operator mapping
-OPERATOR_MAP: dict[str, Callable[[float, float], bool]] = {
-    OPERATOR_GT: op.gt,
-    OPERATOR_LT: op.lt,
-    OPERATOR_GTE: op.ge,
-    OPERATOR_LTE: op.le,
-    OPERATOR_EQ: op.eq,
-    OPERATOR_NEQ: op.ne,
-}
+# Repairs issue for a rule whose entity does not exist (issue id: prefix + entity id)
+MISSING_ENTITY_ISSUE_PREFIX = "missing_entity_"
+
+
+def _missing_entity_issue_ids(hass: HomeAssistant) -> set[str]:
+    """The ids of the "entity not found" issues of this integration that exist now."""
+    registry = ir.async_get(hass)
+    return {
+        issue_id
+        for (domain, issue_id) in registry.issues
+        if domain == DOMAIN and issue_id.startswith(MISSING_ENTITY_ISSUE_PREFIX)
+    }
+
+
+@callback
+def delete_missing_entity_issues(hass: HomeAssistant) -> None:
+    """Remove all "entity not found" issues (the integration is removed)."""
+    for issue_id in _missing_entity_issue_ids(hass):
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 @dataclass
@@ -76,13 +86,11 @@ class RuleState:
     # Runtime
     is_triggered: bool = False
     is_unsafe: bool = False  # After delay consideration
-    last_updated: float | None = None
     watchdog_expired: bool = False
     entity_available: bool = False
     entity_initialized: bool = False
 
     # Unsafe delay tracking
-    _unsafe_delay_start: float | None = None
     _unsafe_delay_cancel: CALLBACK_TYPE | None = None
 
     # Current entity value (for descriptions)
@@ -95,33 +103,17 @@ class RuleState:
         if state_value is None:
             return True  # unavailable => unsafe
 
-        # Try numeric comparison first
-        try:
-            value = float(state_value)
-            # Try to convert threshold to float too
-            thresh_val = float(self.threshold)
-            op_func = OPERATOR_MAP.get(self.operator_str)
-            if op_func is not None:
-                return op_func(value, thresh_val)
-        except (ValueError, TypeError):
-            # Fall back to string comparison for equality/inequality
-            pass
-
-        # String comparison for == and !=
-        if self.operator_str in (OPERATOR_EQ, OPERATOR_NEQ):
-            target = str(self.threshold)
-            if self.operator_str == OPERATOR_EQ:
-                return state_value == target
-            return state_value != target
-
-        _LOGGER.warning(
-            "Cannot perform numeric comparison %s %s %s for %s",
-            state_value,
-            self.operator_str,
-            self.threshold,
-            self.entity_id,
-        )
-        return True  # Can't evaluate => unsafe
+        result = rule_triggered(self.operator_str, self.threshold, state_value)
+        if result is None:
+            _LOGGER.warning(
+                "Cannot perform numeric comparison %s %s %s for %s",
+                state_value,
+                self.operator_str,
+                self.threshold,
+                self.entity_id,
+            )
+            return True  # Can't evaluate => unsafe
+        return result
 
 
 @dataclass
@@ -150,8 +142,19 @@ class GroupState:
         return max(0.0, remaining) if remaining > 0 else 0.0
 
     @property
+    def settle_ends_at(self) -> datetime | None:
+        """When the settle timer ends (UTC), or None. The time does not change while it counts down."""
+        remaining = self.settle_remaining
+        if remaining is None:
+            return None
+        return dt_util.utcnow() + timedelta(seconds=remaining)
+
+    @property
     def description(self) -> str:
         """Build a human-readable description of the group state."""
+        if not self.rules:
+            return f"Group {self.name}: UNSAFE -> no rules configured"
+
         if not self.boot_guard_complete:
             return f"Group {self.name}: Initializing (boot guard)"
 
@@ -159,9 +162,11 @@ class GroupState:
         if not unsafe_rules:
             remaining = self.settle_remaining
             if self.is_unsafe and remaining is not None and remaining > 0:
+                # A time of day, not "N seconds remaining": the text is only rewritten on events
+                ends_at = dt_util.as_local(self.settle_ends_at)
                 return (
-                    f"Group {self.name}: Settling "
-                    f"({remaining:.0f}s remaining)"
+                    f"Group {self.name}: Settling until "
+                    f"{ends_at:%H:%M:%S}"
                 )
             return f"Group {self.name}: SAFE"
 
@@ -194,15 +199,14 @@ class SafetyCoordinator:
         self._is_safe = False
         self._description = "Initializing..."
         self._force_safe = False
-        self._force_safe_generation = 0
         self._force_unsafe = False
         self._groups: list[GroupState] = []
         self._listeners: list[CALLBACK_TYPE] = []
         self._watchdog_interval_cancel: CALLBACK_TYPE | None = None
         self._update_callbacks: list[Callable[[], None]] = []
 
-        # Global boot guard
-        self._boot_complete: bool = False
+        # Force Unsafe (maintenance mode) has to survive a restart and the reload after an options change
+        self._store: Store = Store(hass, STORAGE_VERSION, storage_key(entry.entry_id))
 
         # Master state
         self.is_connected: bool = False
@@ -233,10 +237,17 @@ class SafetyCoordinator:
 
     async def async_start(self) -> None:
         """Start the coordinator: build groups, subscribe to entities."""
+        # Before the first evaluation, so the monitor is never safe for a moment while maintenance mode is on
+        stored = await self._store.async_load()
+        if isinstance(stored, dict) and stored.get(STORAGE_KEY_FORCE_UNSAFE):
+            self._force_unsafe = True
+            _LOGGER.warning("Force Unsafe (maintenance mode) is still active, restored from storage")
+
         self._build_groups()
         self._subscribe_entities()
         # Initial evaluation of all current states
         self._initial_evaluate()
+        self._update_missing_entity_issues()
 
         # Re-evaluate after HA is fully started (entities may load late)
         @callback
@@ -250,6 +261,7 @@ class SafetyCoordinator:
                     ", ".join(pending),
                 )
                 self._initial_evaluate()
+            self._update_missing_entity_issues()
 
         cancel = self.hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED, _on_ha_started
@@ -298,22 +310,26 @@ class SafetyCoordinator:
 
             rules_config: list[dict[str, Any]] = g_conf.get(CONF_RULES, [])
             for r_conf in rules_config:
-                threshold_raw = r_conf.get(CONF_RULE_THRESHOLD, "0")
+                threshold_raw = str(r_conf.get(CONF_RULE_THRESHOLD, "0")).strip()
                 try:
                     # Keep as float if possible, else keep as string
                     threshold = float(threshold_raw)
                 except (ValueError, TypeError):
-                    threshold = str(threshold_raw)
+                    threshold = threshold_raw
 
+                entity_id = r_conf.get(CONF_RULE_ENTITY, "")
                 rule = RuleState(
-                    entity_id=r_conf.get(CONF_RULE_ENTITY, ""),
+                    entity_id=entity_id,
                     operator_str=r_conf.get(CONF_RULE_OPERATOR, OPERATOR_GT),
                     threshold=threshold,
                     unsafe_delay=float(
                         r_conf.get(CONF_RULE_UNSAFE_DELAY, DEFAULT_UNSAFE_DELAY)
                     ),
                     watchdog_timeout=float(
-                        r_conf.get(CONF_RULE_WATCHDOG_TIMEOUT, DEFAULT_WATCHDOG_TIMEOUT)
+                        r_conf.get(
+                            CONF_RULE_WATCHDOG_TIMEOUT,
+                            default_watchdog_timeout(entity_id),
+                        )
                     ),
                 )
                 group.rules.append(rule)
@@ -354,18 +370,17 @@ class SafetyCoordinator:
                 else:
                     rule.entity_available = True
                     rule.entity_initialized = True
-                    rule.last_updated = time.monotonic()
                     triggered = rule.evaluate(state.state)
                     rule.is_triggered = triggered
                     rule.is_unsafe = triggered  # No delay on initial eval
-                
+
                 # Check watchdog expiry (Option 3)
                 self._update_watchdog_state(rule)
 
             if not group.rules:
-                # Empty group = safe, boot guard complete
+                # A group without rules monitors nothing: UNSAFE (fail-safe, like "no groups")
                 group.boot_guard_complete = True
-                group.is_unsafe = False
+                group.is_unsafe = True
             elif all_initialized:
                 # All entities available — run proper group evaluation
                 self._evaluate_group(group)
@@ -403,8 +418,7 @@ class SafetyCoordinator:
 
                 rule.entity_available = True
                 rule.entity_initialized = True
-                rule.last_updated = time.monotonic()
-                
+
                 # Watchdog is now handled by periodic _check_watchdogs (Option 3)
 
                 # Evaluate rule
@@ -434,7 +448,6 @@ class SafetyCoordinator:
                 if rule.is_triggered:
                     self._set_rule_unsafe(rule, group)
 
-            rule._unsafe_delay_start = time.monotonic()
             rule._unsafe_delay_cancel = async_call_later(
                 self.hass, rule.unsafe_delay, _delay_done
             )
@@ -448,7 +461,6 @@ class SafetyCoordinator:
         if rule._unsafe_delay_cancel is not None:
             rule._unsafe_delay_cancel()
             rule._unsafe_delay_cancel = None
-            rule._unsafe_delay_start = None
 
         if not rule.is_unsafe:
             return  # Already safe
@@ -478,7 +490,6 @@ class SafetyCoordinator:
                 rule.entity_id,
             )
             self._force_safe = False
-            self._force_safe_generation += 1
 
         self._evaluate_group(group)
 
@@ -494,7 +505,8 @@ class SafetyCoordinator:
     def _evaluate_group(self, group: GroupState) -> None:
         """Evaluate whether a group is UNSAFE based on its logic type."""
         if not group.rules:
-            group.is_unsafe = False
+            # A group without rules monitors nothing: UNSAFE (fail-safe, like "no groups")
+            group.is_unsafe = True
             group.boot_guard_complete = True
             self._recalculate()
             return
@@ -524,7 +536,6 @@ class SafetyCoordinator:
                     group.name,
                 )
                 self._force_safe = False
-                self._force_safe_generation += 1
             group.is_unsafe = True
             self._recalculate()
         else:
@@ -568,6 +579,9 @@ class SafetyCoordinator:
 
     # --- Watchdog (Option 3) ---
 
+    # @callback: Home Assistant runs a plain function in a worker thread, but this one changes state,
+    # starts timers and writes entity states, which all have to happen in the event loop.
+    @callback
     def _check_watchdogs(self, _now: Any = None) -> None:
         """Periodic check for watchdog expiration on all rules."""
         any_changed = False
@@ -589,6 +603,44 @@ class SafetyCoordinator:
         
         if any_changed:
             self._recalculate()
+
+        self._update_missing_entity_issues()
+
+    @callback
+    def _update_missing_entity_issues(self) -> None:
+        """Show a Repairs issue for every rule whose entity does not exist (or is disabled).
+
+        A registered, enabled entity always has a state (at worst "unavailable"), so "no state" means
+        the entity is gone. Only checked once HA is running: entities of slow integrations appear
+        during startup. Issues of rules that are fixed or deleted are removed again.
+        """
+        if not self.hass.is_running:
+            return
+
+        missing: dict[str, list[str]] = {}
+        for group in self._groups:
+            for rule in group.rules:
+                if rule.entity_id and self.hass.states.get(rule.entity_id) is None:
+                    names = missing.setdefault(rule.entity_id, [])
+                    if group.name not in names:
+                        names.append(group.name)
+
+        wanted = {f"{MISSING_ENTITY_ISSUE_PREFIX}{eid}" for eid in missing}
+        for issue_id in _missing_entity_issue_ids(self.hass) - wanted:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+        for entity_id, group_names in missing.items():
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"{MISSING_ENTITY_ISSUE_PREFIX}{entity_id}",
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="missing_entity",
+                translation_placeholders={
+                    "entity_id": entity_id,
+                    "groups": ", ".join(group_names),
+                },
+            )
 
     def _update_watchdog_state(self, rule: RuleState) -> bool:
         """Update a rule's watchdog state based on HA's last_reported timestamp.
@@ -670,7 +722,6 @@ class SafetyCoordinator:
                 self._description = "SAFE: Force Safe override active (timers bypassed)"
             else:
                 self._description = "SAFE: All groups report safe"
-            self._boot_complete = True
         else:
             self._is_safe = False
             descriptions = [g.description for g in unsafe_groups]
@@ -682,12 +733,17 @@ class SafetyCoordinator:
 
     @callback
     def set_force_unsafe(self, active: bool) -> None:
-        """Enable or disable Force Unsafe (Maintenance Mode)."""
+        """Enable or disable Force Unsafe (Maintenance Mode). The state is stored: it survives restarts."""
         self._force_unsafe = active
         if active:
             self._force_safe = False
+        self._store.async_delay_save(self._data_to_store, 0)
         _LOGGER.info("Force Unsafe set to %s", active)
         self._recalculate()
+
+    def _data_to_store(self) -> dict[str, Any]:
+        """Data written to storage."""
+        return {STORAGE_KEY_FORCE_UNSAFE: self._force_unsafe}
 
     @callback
     def trigger_force_safe(self) -> None:
@@ -697,20 +753,19 @@ class SafetyCoordinator:
             return
 
         self._force_safe = True
-        self._force_safe_generation += 1
-        gen = self._force_safe_generation
-        _LOGGER.info("Force Safe activated (generation %d)", gen)
+        _LOGGER.info("Force Safe activated")
 
         # Cancel all settle timers — groups that are really safe go safe immediately.
-        # Groups with missing data or unsafe rules stay unsafe: Force Safe only
+        # Groups with missing data, without rules or with unsafe rules stay unsafe: Force Safe only
         # skips waiting, it never overrides an actual unsafe condition.
         for group in self._groups:
             if group._settle_cancel is not None:
                 group._settle_cancel()
                 group._settle_cancel = None
                 group.settle_timer_start = None
-            if group.rules and (
-                not all(r.entity_initialized for r in group.rules)
+            if (
+                not group.rules
+                or not all(r.entity_initialized for r in group.rules)
                 or self._rules_unsafe(group)
             ):
                 continue
