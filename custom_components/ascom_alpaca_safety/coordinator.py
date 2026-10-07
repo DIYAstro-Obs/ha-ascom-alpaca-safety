@@ -40,14 +40,19 @@ from .const import (
     CONF_RULE_UNSAFE_DELAY,
     CONF_RULE_WATCHDOG_TIMEOUT,
     CONF_RULES,
+    DEFAULT_MANUAL_SAFE_HOURS,
     DEFAULT_SETTLE_TIME,
     DEFAULT_UNSAFE_DELAY,
     DOMAIN,
     EVENT_SAFETY_CHANGED,
     LOGIC_AND,
     LOGIC_OR,
+    MAX_MANUAL_SAFE_HOURS,
     OPERATOR_GT,
     STORAGE_KEY_FORCE_UNSAFE,
+    STORAGE_KEY_MANUAL_SAFE,
+    STORAGE_KEY_MANUAL_SAFE_HOURS,
+    STORAGE_KEY_MANUAL_SAFE_UNTIL,
     STORAGE_VERSION,
     WATCHDOG_CHECK_INTERVAL,
     storage_key,
@@ -224,6 +229,12 @@ class SafetyCoordinator:
         self._description = "Initializing..."
         self._force_safe = False
         self._force_unsafe = False
+        # Manual Safe: the monitor reports SAFE whatever the rules say, until it ends. The end is a time
+        # (None: until it is switched off) that is stored, so that the override survives a restart.
+        self._manual_safe = False
+        self._manual_safe_until: datetime | None = None
+        self._manual_safe_hours: float = float(DEFAULT_MANUAL_SAFE_HOURS)
+        self._manual_safe_cancel: CALLBACK_TYPE | None = None
         self._groups: list[GroupState] = []
         self._listeners: list[CALLBACK_TYPE] = []
         self._watchdog_interval_cancel: CALLBACK_TYPE | None = None
@@ -252,6 +263,21 @@ class SafetyCoordinator:
         return self._force_unsafe
 
     @property
+    def manual_safe(self) -> bool:
+        """Return True if the Manual Safe override is active."""
+        return self._manual_safe
+
+    @property
+    def manual_safe_until(self) -> datetime | None:
+        """When the Manual Safe override ends (UTC), or None for "until it is switched off"."""
+        return self._manual_safe_until
+
+    @property
+    def manual_safe_hours(self) -> float:
+        """How long the next Manual Safe override lasts, in hours (0 = until it is switched off)."""
+        return self._manual_safe_hours
+
+    @property
     def groups(self) -> list[GroupState]:
         """Return all group states."""
         return self._groups
@@ -265,6 +291,8 @@ class SafetyCoordinator:
         if isinstance(stored, dict) and stored.get(STORAGE_KEY_FORCE_UNSAFE):
             self._force_unsafe = True
             _LOGGER.warning("Force Unsafe (maintenance mode) is still active, restored from storage")
+        if isinstance(stored, dict):
+            self._restore_manual_safe(stored)
 
         self._build_groups()
         self._subscribe_entities()
@@ -302,6 +330,7 @@ class SafetyCoordinator:
             self._watchdog_interval_cancel()
             self._watchdog_interval_cancel = None
 
+        self._cancel_manual_safe_timer()
         for group in self._groups:
             self._cancel_group_timers(group)
 
@@ -783,6 +812,14 @@ class SafetyCoordinator:
         if self._force_unsafe:
             return False, "UNSAFE: Force Unsafe (Maintenance Mode) active"
 
+        # Manual Safe override: the rules are ignored (that is its purpose, see set_manual_safe)
+        if self._manual_safe:
+            if self._manual_safe_until is None:
+                end = "until it is switched off"
+            else:
+                end = f"until {dt_util.as_local(self._manual_safe_until):%Y-%m-%d %H:%M}"
+            return True, f"SAFE: MANUAL OVERRIDE {end} (the rules are ignored)"
+
         # Check boot guard
         if self._groups and not all(g.boot_guard_complete for g in self._groups):
             pending = [g.name for g in self._groups if not g.boot_guard_complete]
@@ -813,6 +850,11 @@ class SafetyCoordinator:
             "description": self._description,
             "force_safe": self._force_safe,
             "force_unsafe": self._force_unsafe,
+            "manual_safe": self._manual_safe,
+            "manual_safe_until": (
+                self._manual_safe_until.isoformat() if self._manual_safe_until else None
+            ),
+            "manual_safe_hours": self._manual_safe_hours,
             "groups": [
                 {
                     "name": group.name,
@@ -855,13 +897,129 @@ class SafetyCoordinator:
         self._force_unsafe = active
         if active:
             self._force_safe = False
+            self._end_manual_safe()  # maintenance mode wins over the manual override
         self._store.async_delay_save(self._data_to_store, 0)
         _LOGGER.info("Force Unsafe set to %s", active)
         self._recalculate()
 
+    @callback
+    def set_manual_safe(self, active: bool) -> None:
+        """Switch the Manual Safe override on or off.
+
+        On: the monitor reports SAFE whatever the groups and rules say, for the chosen number of hours
+        (0 = until it is switched off). For a failed sensor while the user watches the sky in person. It
+        ignores working sensors too (rain!), so it ends by itself, and Force Unsafe always wins.
+        """
+        if not active:
+            if self._manual_safe:
+                _LOGGER.info("Manual Safe override switched off")
+                self._end_manual_safe()
+                self._store.async_delay_save(self._data_to_store, 0)
+                self._recalculate()
+            return
+
+        if self._force_unsafe:
+            _LOGGER.warning("Cannot set Manual Safe while Force Unsafe is active")
+            self._notify_listeners()  # the switch has to show "off" again
+            return
+
+        self._manual_safe = True
+        self._manual_safe_until = (
+            dt_util.utcnow() + timedelta(hours=self._manual_safe_hours)
+            if self._manual_safe_hours > 0
+            else None
+        )
+        self._schedule_manual_safe_end()
+        _LOGGER.warning(
+            "Manual Safe override ON: the monitor reports SAFE whatever the rules say, %s",
+            "until it is switched off"
+            if self._manual_safe_until is None
+            else f"until {self._manual_safe_until.isoformat()}",
+        )
+        self._store.async_delay_save(self._data_to_store, 0)
+        self._recalculate()
+
+    @callback
+    def set_manual_safe_hours(self, hours: float) -> None:
+        """Set how long the next Manual Safe override lasts (a running one keeps its end)."""
+        self._manual_safe_hours = max(0.0, min(float(hours), float(MAX_MANUAL_SAFE_HOURS)))
+        self._store.async_delay_save(self._data_to_store, 0)
+        self._notify_listeners()
+
+    def _end_manual_safe(self) -> None:
+        """Forget the override and its timer (the caller stores and recalculates)."""
+        self._manual_safe = False
+        self._manual_safe_until = None
+        self._cancel_manual_safe_timer()
+
+    def _cancel_manual_safe_timer(self) -> None:
+        if self._manual_safe_cancel is not None:
+            self._manual_safe_cancel()
+            self._manual_safe_cancel = None
+
+    def _schedule_manual_safe_end(self) -> None:
+        """Start the timer that ends the override at its end time (none for "until switched off")."""
+        self._cancel_manual_safe_timer()
+        if self._manual_safe_until is None:
+            return
+        remaining = max(0.0, (self._manual_safe_until - dt_util.utcnow()).total_seconds())
+
+        @callback
+        def _end(_now: Any) -> None:
+            self._manual_safe_cancel = None
+            _LOGGER.warning("Manual Safe override ended, the rules count again")
+            self._end_manual_safe()
+            self._store.async_delay_save(self._data_to_store, 0)
+            self._recalculate()
+
+        self._manual_safe_cancel = async_call_later(self.hass, remaining, _end)
+
+    def _restore_manual_safe(self, stored: dict[str, Any]) -> None:
+        """Take the Manual Safe override and its duration back from storage after a restart or reload."""
+        try:
+            self._manual_safe_hours = max(
+                0.0,
+                min(
+                    float(stored.get(STORAGE_KEY_MANUAL_SAFE_HOURS, DEFAULT_MANUAL_SAFE_HOURS)),
+                    float(MAX_MANUAL_SAFE_HOURS),
+                ),
+            )
+        except (TypeError, ValueError):
+            pass
+
+        if not stored.get(STORAGE_KEY_MANUAL_SAFE):
+            return
+        until = None
+        if stored.get(STORAGE_KEY_MANUAL_SAFE_UNTIL):
+            try:
+                until = datetime.fromisoformat(stored[STORAGE_KEY_MANUAL_SAFE_UNTIL])
+            except (TypeError, ValueError):
+                _LOGGER.warning("Manual Safe override dropped: its end time cannot be read")
+                self._store.async_delay_save(self._data_to_store, 0)
+                return
+            if until <= dt_util.utcnow():
+                _LOGGER.warning("Manual Safe override ended while Home Assistant was not running")
+                self._store.async_delay_save(self._data_to_store, 0)
+                return
+
+        self._manual_safe = True
+        self._manual_safe_until = until
+        self._schedule_manual_safe_end()
+        _LOGGER.warning(
+            "Manual Safe override is still active, restored from storage (%s)",
+            "until it is switched off" if until is None else f"until {until.isoformat()}",
+        )
+
     def _data_to_store(self) -> dict[str, Any]:
         """Data written to storage."""
-        return {STORAGE_KEY_FORCE_UNSAFE: self._force_unsafe}
+        return {
+            STORAGE_KEY_FORCE_UNSAFE: self._force_unsafe,
+            STORAGE_KEY_MANUAL_SAFE: self._manual_safe,
+            STORAGE_KEY_MANUAL_SAFE_UNTIL: (
+                self._manual_safe_until.isoformat() if self._manual_safe_until else None
+            ),
+            STORAGE_KEY_MANUAL_SAFE_HOURS: self._manual_safe_hours,
+        }
 
     @callback
     def trigger_force_safe(self) -> None:

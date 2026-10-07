@@ -120,6 +120,10 @@ class SafetyMasterSensor(BinarySensorEntity):
         }
         if self._coordinator.force_unsafe:
             attrs["override"] = "force_unsafe"
+        elif self._coordinator.manual_safe:
+            until = self._coordinator.manual_safe_until
+            attrs["override"] = "manual_safe"
+            attrs["override_until"] = until.isoformat() if until else "never"
         return attrs
 
     async def async_added_to_hass(self) -> None:

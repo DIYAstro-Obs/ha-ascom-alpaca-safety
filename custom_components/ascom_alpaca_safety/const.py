@@ -12,6 +12,8 @@ DEFAULT_SETTLE_TIME = 300  # 5 minutes (per group, 0 = no waiting)
 DEFAULT_WATCHDOG_TIMEOUT = 300  # 5 minutes, for entities that report regularly (see rules.py)
 DEFAULT_UNSAFE_DELAY = 0  # no delay by default
 WATCHDOG_CHECK_INTERVAL = 30  # seconds between two watchdog checks (shorter for a short timeout)
+DEFAULT_MANUAL_SAFE_HOURS = 12  # how long the Manual Safe override lasts (0 = until it is switched off)
+MAX_MANUAL_SAFE_HOURS = 168  # one week
 
 # --- Configuration Keys ---
 CONF_GROUPS = "groups"
@@ -76,6 +78,8 @@ UNIQUE_ID_MASTER = "master_safe"
 UNIQUE_ID_GROUP_PREFIX = "group_"
 UNIQUE_ID_FORCE_UNSAFE = "force_unsafe"
 UNIQUE_ID_FORCE_SAFE = "force_safe"
+UNIQUE_ID_MANUAL_SAFE = "manual_safe"
+UNIQUE_ID_MANUAL_SAFE_DURATION = "manual_safe_duration"
 UNIQUE_ID_REASON = "reason"
 
 # --- Event for automations: fired when the monitor changes between safe and unsafe ---
@@ -84,6 +88,9 @@ EVENT_SAFETY_CHANGED = "ascom_alpaca_safety_changed"
 # --- Storage (state that has to survive a restart or reload) ---
 STORAGE_VERSION = 1
 STORAGE_KEY_FORCE_UNSAFE = "force_unsafe"
+STORAGE_KEY_MANUAL_SAFE = "manual_safe"
+STORAGE_KEY_MANUAL_SAFE_UNTIL = "manual_safe_until"  # ISO time, None: until it is switched off
+STORAGE_KEY_MANUAL_SAFE_HOURS = "manual_safe_hours"
 
 
 def storage_key(entry_id: str) -> str:
@@ -91,7 +98,7 @@ def storage_key(entry_id: str) -> str:
     return f"{DOMAIN}.{entry_id}"
 
 # --- Platforms ---
-PLATFORMS = ["binary_sensor", "sensor", "switch", "button"]
+PLATFORMS = ["binary_sensor", "sensor", "switch", "button", "number"]
 
 # --- Device Info for Server Registration ---
 SAFETY_DEVICE_TYPE = "SafetyMonitor"

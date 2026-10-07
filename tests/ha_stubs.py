@@ -177,7 +177,23 @@ def install() -> None:
     class SensorEntity:
         pass
 
+    class SwitchEntity:
+        pass
+
+    class NumberEntity:
+        pass
+
+    class ButtonEntity:
+        pass
+
     components.sensor = _mod("homeassistant.components.sensor", SensorEntity=SensorEntity)
+    components.switch = _mod("homeassistant.components.switch", SwitchEntity=SwitchEntity)
+    components.number = _mod(
+        "homeassistant.components.number",
+        NumberEntity=NumberEntity,
+        NumberMode=types.SimpleNamespace(BOX="box"),
+    )
+    components.button = _mod("homeassistant.components.button", ButtonEntity=ButtonEntity)
     components.binary_sensor = _mod(
         "homeassistant.components.binary_sensor",
         BinarySensorDeviceClass=types.SimpleNamespace(SAFETY="safety"),

@@ -46,7 +46,7 @@ class ForceSafeButton(ButtonEntity):
         self._coordinator = coordinator
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{UNIQUE_ID_FORCE_SAFE}"
-        self._attr_name = "Force Safe (Expert Override)"
+        self._attr_name = "Skip Settle Time"
         self._attr_icon = "mdi:shield-check"
 
     @property

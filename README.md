@@ -19,7 +19,7 @@
   - **Unsafe Delay**: Require a rule to be "unsafe" for a specified duration before it triggers an overall unsafe status.
   - **Settle Time** (per group, default 300 s, 0 = no waiting): Require the group to be "safe" for a sustained period before clearing the unsafe status (prevents rapid toggling).
 - **Watchdog Protection**: Monitors if entities are `unavailable` or haven't updated within a timeout, triggering an unsafe state if data is stale. An optional **grace time** per rule waits for an entity that is only unavailable for a moment.
-- **Manual Overrides**: Includes virtual switches to "Force Unsafe" for maintenance or emergencies (it stays on over restarts and reloads until you switch it off).
+- **Manual Overrides**: Includes virtual switches to "Force Unsafe" for maintenance or emergencies (it stays on over restarts and reloads until you switch it off), and "Manual Safe" to report SAFE while you watch the sky yourself because a sensor has failed (it ends after the hours you choose).
 - **Automations**: An event, a reason sensor and a diagnostics download tell why the monitor is safe or unsafe.
 - **Server Integration**: Automatically registers itself as a `SafetyMonitor` device with the **ASCOM Alpaca Server** integration. Without the server, Safety runs in standalone mode: all Home Assistant entities keep working, but no Alpaca `SafetyMonitor` is exposed.
 
@@ -56,7 +56,7 @@ The user interface is English only; the project does not provide translations.
 
 ### Behaviour at start
 
-Every start of the monitor begins with all groups **unsafe**: a restart of Home Assistant, but also **saving the options**, which reloads the integration. The monitor does not know what happened before, so it treats the start like a recovery from "unsafe". A group reports safe again once all its entities have reported and all its rules are safe for the **settle time** of the group (default 300 s; set it per group, 0 means no waiting). While it waits, the group sensor shows "Settling (…)". The **Force Safe** button skips the waiting for groups whose rules are really safe; it never overrides an unsafe rule or missing data. The settle time of groups you created before has not changed; edit the group to change it.
+Every start of the monitor begins with all groups **unsafe**: a restart of Home Assistant, but also **saving the options**, which reloads the integration. The monitor does not know what happened before, so it treats the start like a recovery from "unsafe". A group reports safe again once all its entities have reported and all its rules are safe for the **settle time** of the group (default 300 s; set it per group, 0 means no waiting). While it waits, the group sensor shows "Settling (…)". The **Skip Settle Time** button skips the waiting for groups whose rules are really safe; it never overrides an unsafe rule or missing data. The settle time of groups you created before has not changed; edit the group to change it.
 
 ## Dashboard Entities
 
@@ -65,7 +65,21 @@ The integration provides several entities for your Home Assistant dashboard:
 - **Reason Sensor**: A text that says why the monitor is safe or unsafe (the description of the master state). A state holds 255 characters at most: the complete text is in the attribute `description`.
 - **Group Safe Sensors**: Individual binary sensors for each logical group. While a group settles, the attribute `settle_ends_at` holds the time it reports safe again (a time, not a countdown: the sensor is only written when something changes). The attribute `settle_remaining` of earlier versions is gone.
 - **Force Unsafe Switch**: Toggle to manually trigger an unsafe state (maintenance mode). It is stored: it stays on over restarts and reloads.
-- **Force Safe Button**: Skips running settle timers. It has no effect while a rule is unsafe or data is missing, and it ends as soon as any group turns unsafe again.
+- **Skip Settle Time Button** (called Force Safe before): Skips running settle timers. It has no effect while a rule is unsafe or data is missing, and it ends as soon as any group turns unsafe again.
+- **Manual Safe Switch** and **Manual Safe Duration**: see below.
+
+### Manual Safe (override)
+
+A failed sensor keeps its group, and with it the monitor, on UNSAFE for good: that is the safe default. If you watch the sky yourself meanwhile, **Manual Safe (Override)** makes the monitor report **SAFE whatever the groups and rules say**; `IsSafe` in Alpaca follows. The reason sensor shows `SAFE: MANUAL OVERRIDE until …`, the master sensor has the attributes `override: manual_safe` and `override_until`, and the event `ascom_alpaca_safety_changed` is sent.
+
+> [!WARNING]
+> The override ignores **every** sensor, including a working rain sensor. Use it only when you are watching yourself.
+
+- **Manual Safe Duration** (hours, default 12, 0 to 168) is how long the override lasts from the moment you switch it on. A running override keeps its end when you change the number. **0 means until you switch it off**: you can forget that.
+- When the time is over (or you switch it off) the real state counts again, which can be UNSAFE at once.
+- The override stays on over restarts and reloads (saving the options) and keeps its end time; an end that passed while Home Assistant was off is dropped.
+- **Force Unsafe always wins**: switching it on ends Manual Safe, and Manual Safe cannot be switched on while Force Unsafe is on.
+- Do not mix it up with **Skip Settle Time**: that button only skips the waiting of groups whose rules are really safe and never overrides an unsafe rule.
 
 ## Automations
 
