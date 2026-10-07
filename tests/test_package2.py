@@ -255,3 +255,21 @@ def test_the_master_sensor_is_called_safety_not_safe(make):
     _, coordinator, _ = make([grp("g", [rule("sensor.x", ">", 5)])], {"sensor.x": "1"})
     sensor = binary_sensor.SafetyMasterSensor(coordinator, types.SimpleNamespace(entry_id="E"))
     assert sensor._attr_name == "Observatory Safety"
+
+
+# ---- the SafetyMonitor does not disappear without a group ------------------------------------------------------
+def test_without_a_group_the_safety_monitor_is_registered_and_reports_unsafe(make):
+    """"No groups" is UNSAFE, not "not there": astronomy software still sees the monitor."""
+    registered = []
+
+    async def register(device_type, device_name, handler):
+        registered.append((device_type, device_name, handler))
+        return lambda: None
+
+    hass, coordinator, _ = make([], {})
+    hass.data = {const.DOMAIN: {"E": {}}, const.ALPACA_SERVER_API_KEY: {"async_register_device": register}}
+
+    assert asyncio.run(integration._try_register_with_server(hass, coordinator, ENTRY)) is True
+    assert [(kind, name) for kind, name, _ in registered] == [("SafetyMonitor", "ASCOM Alpaca Safety")]
+    assert asyncio.run(registered[0][2]("issafe", {})) == {"Value": False}
+    assert "No safety groups configured" in coordinator.description

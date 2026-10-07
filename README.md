@@ -2,6 +2,8 @@
 
 **ASCOM Alpaca Safety** is a sophisticated safety monitoring system for astronomical observatories. It aggregates various Home Assistant sensors and entities into a unified "Safe/Unsafe" status, which it then exposes to the ASCOM Alpaca ecosystem (via [ASCOM Alpaca Server](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-server)).
 
+Safety works on its own in Home Assistant (master sensor, reason sensor, group sensors and the event `ascom_alpaca_safety_changed`). The ASCOM Alpaca Server is only needed to expose it to astronomy software.
+
 ![Alpaca Safety Logo](custom_components/ascom_alpaca_safety/brand/icon@2x.png)
 
 > [!CAUTION]
@@ -116,6 +118,7 @@ actions:
 ## Alpaca behaviour
 
 - `Connected` is kept per client by the **ASCOM Alpaca Server** (not by Safety): a client that disconnects does not disconnect another one. This needs **ASCOM Alpaca Server 0.11.0 or newer**.
+- Without a group the SafetyMonitor is still there: it reports `IsSafe = false` (reason "No safety groups configured") instead of disappearing, so that astronomy software never runs without a monitor unnoticed.
 - `IsSafe` answers whether or not the client has connected (ASCOM would answer `NotConnected` before). This is meant: saving the options reloads Safety, and clients that are connected must not be cut off from the monitor by an error.
 - Safety implements the interface version 1 of the SafetyMonitor. The members of ASCOM Platform 7 (`Connect`, `Disconnect`, `Connecting`, `DeviceState`) are not implemented: clients use them only for devices that report interface version 3, and every client still supports the classic `Connected`.
 
