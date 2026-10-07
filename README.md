@@ -37,6 +37,8 @@ The configuration is handled via the integration's **Options** menu:
 - Add rules to groups, selecting HA entities and defining thresholds.
 - Configure global and rule-specific timers (Settle Time, Unsafe Delay, Watchdog).
 
+The user interface is English only; the project does not provide translations.
+
 ### Rules
 
 - A rule describes the **unsafe** condition: `Rain sensor == on` means "unsafe while it rains".
