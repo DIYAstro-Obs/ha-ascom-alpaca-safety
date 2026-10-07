@@ -8,7 +8,7 @@
 > **AS-IS / EXPERIMENTAL**
 > This project is provided "as-is" without any warranty. It has not yet been tested in a real-life observatory environment. Use it at your own risk.
 >
-> The project is **under active development**. Testing is very welcome! Please report any bugs by opening an [issue](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-safety/issues). Contributions are also highly appreciated.
+> The project is **under active development**: breaking changes are possible and even likely. Options, entity names and IDs, and the interface between the integrations may change from one version to the next, and you may have to set things up again. Testing is very welcome! Please report any bugs by opening an [issue](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-safety/issues). Contributions are also highly appreciated.
 
 ## Features
 
