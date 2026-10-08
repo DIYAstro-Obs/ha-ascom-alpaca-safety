@@ -1,9 +1,11 @@
 """Small fixes: re-evaluation at the start of HA, the watchdog description and the watchdog interval."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import ha_stubs
 from helpers import grp, push, rule
 
 
@@ -63,6 +65,38 @@ def test_ha_started_without_waiting_groups_changes_nothing(make):
     ha_started(hass)(None)
     assert pending_delays(timers) == [60]
     assert coordinator.is_safe
+
+
+# ---- the "HA started" listener fires once and is gone: stopping must not cancel it again (HA logs an error) --------
+@pytest.fixture
+def cancelled(monkeypatch):
+    """The events whose listener was cancelled (the fake bus returns a cancel function that records it)."""
+    done = []
+
+    def listen(self, event, cb):
+        self.listeners.append((event, cb))
+        return lambda: done.append(event)
+
+    monkeypatch.setattr(ha_stubs.FakeHass, "_listen", listen)
+    return done
+
+
+def test_stop_does_not_cancel_the_started_listener_after_it_fired(make, cancelled):
+    hass, coordinator, _ = make([grp("A", [rule("sensor.a", ">", 5)], settle=0)], {"sensor.a": "1"}, running=False)
+    ha_started(hass)(None)
+    asyncio.run(coordinator.async_stop())
+    assert "homeassistant_started" not in cancelled
+
+
+def test_stop_cancels_the_started_listener_that_did_not_fire_yet(make, cancelled):
+    hass, coordinator, _ = make([grp("A", [rule("sensor.a", ">", 5)], settle=0)], {"sensor.a": "1"}, running=False)
+    asyncio.run(coordinator.async_stop())
+    assert "homeassistant_started" in cancelled
+
+
+def test_a_reload_while_ha_runs_registers_no_started_listener(make):
+    hass, coordinator, _ = make([grp("A", [rule("sensor.a", ">", 5)], settle=0)], {"sensor.a": "1"}, running=True)
+    assert "homeassistant_started" not in [event for event, _ in hass.listeners]
 
 
 # ---- B9: an entity that reports again is not "watchdog expired" ----------------------------------------------------

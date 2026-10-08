@@ -300,23 +300,28 @@ class SafetyCoordinator:
         self._initial_evaluate()
         self._update_missing_entity_issues()
 
-        # Re-evaluate after HA is fully started (entities may load late)
-        @callback
-        def _on_ha_started(event: Event) -> None:
-            pending = [g for g in self._groups if not g.boot_guard_complete]
-            if pending:
-                _LOGGER.info(
-                    "HA started — re-evaluating pending groups: %s",
-                    ", ".join(g.name for g in pending),
-                )
-                # only these: a group that is done may have an unsafe delay or a settle timer running
-                self._initial_evaluate(pending)
-            self._update_missing_entity_issues()
+        # Re-evaluate after HA is fully started (entities may load late). Only while HA is still starting:
+        # after a reload the event does not come again
+        if not self.hass.is_running:
 
-        cancel = self.hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED, _on_ha_started
-        )
-        self._listeners.append(cancel)
+            @callback
+            def _on_ha_started(event: Event) -> None:
+                # a once-listener is gone after it fired: stopping must not cancel it a second time
+                self._listeners.remove(cancel)
+                pending = [g for g in self._groups if not g.boot_guard_complete]
+                if pending:
+                    _LOGGER.info(
+                        "HA started — re-evaluating pending groups: %s",
+                        ", ".join(g.name for g in pending),
+                    )
+                    # only these: a group that is done may have an unsafe delay or a settle timer running
+                    self._initial_evaluate(pending)
+                self._update_missing_entity_issues()
+
+            cancel = self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, _on_ha_started
+            )
+            self._listeners.append(cancel)
 
         _LOGGER.info("SafetyCoordinator started with %d groups", len(self._groups))
 
