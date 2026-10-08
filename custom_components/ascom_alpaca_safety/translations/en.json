@@ -106,7 +106,7 @@
                     "threshold": "The value to compare against. Numbers for > < >= <=; on or off for the state of binary sensors, switches and lights; the states of weather entities and of selects are offered; other values are compared without regard to upper or lower case. For 'Is one of' and 'Is none of': a list separated by commas, for example rainy, pouring, lightning.",
                     "unsafe_delay": "Ignore brief spikes shorter than this (0 = instant).",
                     "unavailable_delay": "An entity that is unavailable or unknown counts as unsafe at once (0). Enter a time to wait for it to come back first: until then the rule keeps its last result.",
-                    "watchdog_timeout": "Mark unsafe if the entity has not reported within this time (0 = off). Leave empty: 300 s for sensors and weather, off for everything else (binary sensors, switches and helpers only report when they change)."
+                    "watchdog_timeout": "Mark unsafe if the entity has not reported within this time (0 = off). Leave empty: 300 s for sensors and weather, off for everything else (binary sensors, switches and helpers only report when they change). Data that is only polled every few minutes (a weather service) needs a time longer than its polling interval."
                 }
             }
         },
