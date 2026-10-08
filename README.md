@@ -29,7 +29,7 @@ This project is not affiliated with or endorsed by the ASCOM Initiative.
 
 ## Installation
 
-**ASCOM Alpaca Server** (optional, but required to expose the Safety Monitor via Alpaca): install the [ASCOM Alpaca Server](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-server) integration, **version 0.11.0 or newer** (older versions do not keep `Connected` per client, and astronomy software cannot connect to the Safety Monitor). When Home Assistant starts, the Server is set up first (`after_dependencies`) and Safety registers with it at once. If it is missing, Safety runs in standalone mode and shows a notification; it registers as soon as the Server is added.
+**ASCOM Alpaca Server** (optional, but required to expose the Safety Monitor via Alpaca): install the [ASCOM Alpaca Server](https://github.com/DIYAstro-Obs/ha-ascom-alpaca-server) integration, **version 0.20.0 or newer** (older versions do not keep `Connected` per client, and astronomy software cannot connect to the Safety Monitor). When Home Assistant starts, the Server is set up first (`after_dependencies`) and Safety registers with it at once. If it is missing, Safety runs in standalone mode and shows a notification; it registers as soon as the Server is added.
 
 ### Via HACS (recommended)
 
@@ -118,7 +118,7 @@ actions:
 
 ## Alpaca behaviour
 
-- `Connected` is kept per client by the **ASCOM Alpaca Server** (not by Safety): a client that disconnects does not disconnect another one. This needs **ASCOM Alpaca Server 0.11.0 or newer**.
+- `Connected` is kept per client by the **ASCOM Alpaca Server** (not by Safety): a client that disconnects does not disconnect another one. This needs **ASCOM Alpaca Server 0.20.0 or newer**.
 - Without a group the SafetyMonitor is still there: it reports `IsSafe = false` (reason "No safety groups configured") instead of disappearing, so that astronomy software never runs without a monitor unnoticed.
 - `IsSafe` answers whether or not the client has connected (ASCOM would answer `NotConnected` before). This is meant: saving the options reloads Safety, and clients that are connected must not be cut off from the monitor by an error.
 - Safety implements the interface version 1 of the SafetyMonitor. The members of ASCOM Platform 7 (`Connect`, `Disconnect`, `Connecting`, `DeviceState`) are not implemented: clients use them only for devices that report interface version 3, and every client still supports the classic `Connected`.

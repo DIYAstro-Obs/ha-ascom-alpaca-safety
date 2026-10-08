@@ -103,4 +103,4 @@ PLATFORMS = ["binary_sensor", "sensor", "switch", "button", "number"]
 # --- Device Info for Server Registration ---
 SAFETY_DEVICE_TYPE = "SafetyMonitor"
 SAFETY_DEVICE_NAME = "ASCOM Alpaca Safety"
-SAFETY_DRIVER_VERSION = "0.9.0"
+SAFETY_DRIVER_VERSION = "0.20.0"
