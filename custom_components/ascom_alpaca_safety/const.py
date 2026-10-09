@@ -97,6 +97,9 @@ def storage_key(entry_id: str) -> str:
     """Name of the storage file of a config entry."""
     return f"{DOMAIN}.{entry_id}"
 
+# The reason sensor names at most this many unsafe groups in its state ("UNSAFE: a, b, c +2")
+SUMMARY_GROUPS_SHOWN = 3
+
 # --- Platforms ---
 PLATFORMS = ["binary_sensor", "sensor", "switch", "button", "number"]
 

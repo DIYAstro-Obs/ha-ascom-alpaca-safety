@@ -361,15 +361,70 @@ def reason_sensor(coordinator):
     return sensor.SafetyReasonSensor(coordinator, types.SimpleNamespace(entry_id="E"))
 
 
-def test_the_reason_sensor_shows_the_description(make):
+def test_the_reason_sensor_shows_the_summary_and_keeps_the_description_in_an_attribute(make):
     hass, coordinator, _ = make([grp("g", [rule("sensor.x", ">", 5)], settle=0)], {"sensor.x": "9"})
     entity = reason_sensor(coordinator)
-    assert entity.native_value == coordinator.description
-    assert "sensor.x 9" in entity.native_value
-    assert entity.extra_state_attributes == {"description": coordinator.description}
+    assert entity.native_value == "UNSAFE: g"  # short: a card cuts a long state
+    assert "sensor.x 9" in coordinator.description
+    assert entity.extra_state_attributes == {"description": coordinator.description, "unsafe_groups": ["g"]}
 
     push(hass, coordinator, "sensor.x", "1")
-    assert reason_sensor(coordinator).native_value == "SAFE: All groups report safe"
+    assert reason_sensor(coordinator).native_value == "SAFE"
+    assert reason_sensor(coordinator).extra_state_attributes == {
+        "description": "SAFE: All groups report safe",
+        "unsafe_groups": [],
+    }
+
+
+# ---- the summary: the state of the reason sensor in a few words ------------------------------------------------------
+def unsafe_groups(count):
+    return [grp(f"g{n}", [rule(f"sensor.s{n}", ">", 5)], settle=0, gid=f"g{n}") for n in range(count)]
+
+
+def test_the_summary_names_the_unsafe_groups(make):
+    groups = unsafe_groups(3)
+    hass, coordinator, _ = make(groups, {"sensor.s0": "9", "sensor.s1": "1", "sensor.s2": "9"})
+    assert coordinator.summary == "UNSAFE: g0, g2"
+    assert coordinator.unsafe_group_names == ["g0", "g2"]
+
+
+def test_the_summary_shows_three_group_names_and_counts_the_rest(make):
+    hass, coordinator, _ = make(unsafe_groups(5), {f"sensor.s{n}": "9" for n in range(5)})
+    assert coordinator.summary == "UNSAFE: g0, g1, g2 +2"
+    assert len(coordinator.unsafe_group_names) == 5
+
+
+def test_the_summary_of_a_safe_monitor_is_just_safe(make):
+    hass, coordinator, _ = make(unsafe_groups(1), {"sensor.s0": "1"})
+    assert coordinator.summary == "SAFE"
+
+
+def test_the_summary_of_the_overrides(make):
+    hass, coordinator, _ = make(unsafe_groups(1), {"sensor.s0": "9"})
+    coordinator.set_manual_safe_hours(0)
+    coordinator.set_manual_safe(True)
+    assert coordinator.summary == "SAFE: Manual Safe until switched off"
+    coordinator.set_manual_safe_hours(2)
+    coordinator.set_manual_safe(False)
+    coordinator.set_manual_safe(True)
+    assert coordinator.summary.startswith("SAFE: Manual Safe until 20")  # a date and a time
+    assert coordinator.unsafe_group_names == ["g0"]  # the groups say what they say, the override does not change them
+    coordinator.set_force_unsafe(True)
+    assert coordinator.summary == "UNSAFE: Force Unsafe (maintenance)"
+
+
+def test_the_summary_while_the_monitor_starts_and_without_groups(make):
+    hass, coordinator, _ = make(unsafe_groups(1), {})  # the entity is not there yet: the group waits
+    assert coordinator.summary == "UNSAFE: Initializing"
+    hass, coordinator, _ = make([], {})
+    assert coordinator.summary == "UNSAFE: No groups"
+
+
+def test_the_event_still_carries_the_complete_description(make):
+    hass, coordinator, _ = make([grp("g", [rule("sensor.x", ">", 5)], settle=0)], {"sensor.x": "9"})
+    event = [data for name, data in hass.events if name == "ascom_alpaca_safety_changed"][-1]
+    assert event["reason"] == coordinator.description
+    assert "sensor.x 9 > 5.0" in event["reason"]
 
 
 def test_a_long_reason_is_cut_to_what_a_state_may_hold():

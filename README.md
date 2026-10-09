@@ -79,7 +79,7 @@ Every start of the monitor begins with all groups **unsafe**: a restart of Home 
 
 The integration provides several entities for your Home Assistant dashboard:
 - **Master Safety Sensor** ("Observatory Safety"): A binary sensor showing the overall observatory safety status. Like every Home Assistant safety sensor, **on means unsafe** and off means safe, shown as "Unsafe" and "Safe".
-- **Reason Sensor**: A text that says why the monitor is safe or unsafe (the description of the master state). A state holds 255 characters at most: the complete text is in the attribute `description`.
+- **Reason Sensor**: Says why the monitor is safe or unsafe. Its state is short: `SAFE`, `UNSAFE: obs roof` (the names of the unsafe groups, at most three, then `+N`) or the name of an override. The complete text with entity, value and threshold is in the attribute `description`, the names of the unsafe groups are in the attribute `unsafe_groups`.
 - **Group Safe Sensors**: Individual binary sensors for each logical group. While a group settles, the attribute `settle_ends_at` holds the time it reports safe again (a time, not a countdown: the sensor is only written when something changes). The attribute `settle_remaining` of earlier versions is gone.
 - **Force Unsafe Switch**: Toggle to manually trigger an unsafe state (maintenance mode). It is stored: it stays on over restarts and reloads.
 - **Skip Settle Time Button** (called Force Safe before): Skips running settle timers. It has no effect while a rule is unsafe or data is missing, and it ends as soon as any group turns unsafe again.
@@ -87,7 +87,7 @@ The integration provides several entities for your Home Assistant dashboard:
 
 ### Manual Safe (override)
 
-A failed sensor keeps its group, and with it the monitor, on UNSAFE for good: that is the safe default. If you watch the sky yourself meanwhile, **Manual Safe (Override)** makes the monitor report **SAFE whatever the groups and rules say**; `IsSafe` in Alpaca follows. The reason sensor shows `SAFE: MANUAL OVERRIDE until …`, the master sensor has the attributes `override: manual_safe` and `override_until`, and the event `ascom_alpaca_safety_changed` is sent.
+A failed sensor keeps its group, and with it the monitor, on UNSAFE for good: that is the safe default. If you watch the sky yourself meanwhile, **Manual Safe (Override)** makes the monitor report **SAFE whatever the groups and rules say**; `IsSafe` in Alpaca follows. The reason sensor shows `SAFE: Manual Safe until …` (the attribute `description` has the complete text), the master sensor has the attributes `override: manual_safe` and `override_until`, and the event `ascom_alpaca_safety_changed` is sent.
 
 > [!WARNING]
 > The override ignores **every** sensor, including a working rain sensor. Use it only when you are watching yourself.
@@ -100,7 +100,7 @@ A failed sensor keeps its group, and with it the monitor, on UNSAFE for good: th
 
 ## Automations
 
-Whenever the monitor changes between safe and unsafe, it fires the event `ascom_alpaca_safety_changed` with the data `is_safe` (`true` / `false`) and `reason` (the text of the reason sensor). Every start of the monitor sends one too (see *Behaviour at start*: it starts unsafe). A change of the reason while the monitor stays unsafe sends nothing.
+Whenever the monitor changes between safe and unsafe, it fires the event `ascom_alpaca_safety_changed` with the data `is_safe` (`true` / `false`) and `reason` (the complete description, the attribute `description` of the reason sensor). Every start of the monitor sends one too (see *Behaviour at start*: it starts unsafe). A change of the reason while the monitor stays unsafe sends nothing.
 
 ```yaml
 triggers:

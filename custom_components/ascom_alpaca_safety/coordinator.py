@@ -54,6 +54,7 @@ from .const import (
     STORAGE_KEY_MANUAL_SAFE_HOURS,
     STORAGE_KEY_MANUAL_SAFE_UNTIL,
     STORAGE_VERSION,
+    SUMMARY_GROUPS_SHOWN,
     WATCHDOG_CHECK_INTERVAL,
     storage_key,
 )
@@ -227,6 +228,7 @@ class SafetyCoordinator:
 
         self._is_safe = False
         self._description = "Initializing..."
+        self._summary = "UNSAFE: Initializing"
         self._force_safe = False
         self._force_unsafe = False
         # Manual Safe: the monitor reports SAFE whatever the rules say, until it ends. The end is a time
@@ -256,6 +258,16 @@ class SafetyCoordinator:
     def description(self) -> str:
         """Return human-readable description of current state."""
         return self._description
+
+    @property
+    def summary(self) -> str:
+        """The state in a few words (``UNSAFE: obs roof``), for the state of the reason sensor."""
+        return self._summary
+
+    @property
+    def unsafe_group_names(self) -> list[str]:
+        """The names of the groups that are unsafe at the moment (an override does not change them)."""
+        return [g.name for g in self._groups if g.is_unsafe]
 
     @property
     def force_unsafe(self) -> bool:
@@ -798,7 +810,7 @@ class SafetyCoordinator:
     @callback
     def _recalculate(self) -> None:
         """Recalculate the master safety state and tell listeners and automations."""
-        self._is_safe, self._description = self._master_state()
+        self._is_safe, self._description, self._summary = self._master_state()
 
         # An event for automations, whenever the monitor reports something else than the last time
         # (also the first result after a start, which is unsafe: the monitor does not know the time before)
@@ -811,31 +823,45 @@ class SafetyCoordinator:
 
         self._notify_listeners()
 
-    def _master_state(self) -> tuple[bool, str]:
-        """The master state: ``(is_safe, description)``."""
+    def _master_state(self) -> tuple[bool, str, str]:
+        """The master state: ``(is_safe, description, summary)``.
+
+        The description is the complete text (event, attribute, diagnostics); the summary says the same in a
+        few words, because it is the state of the reason sensor and a card cuts a long state.
+        """
         # Force Unsafe override
         if self._force_unsafe:
-            return False, "UNSAFE: Force Unsafe (Maintenance Mode) active"
+            return (
+                False,
+                "UNSAFE: Force Unsafe (Maintenance Mode) active",
+                "UNSAFE: Force Unsafe (maintenance)",
+            )
 
         # Manual Safe override: the rules are ignored (that is its purpose, see set_manual_safe)
         if self._manual_safe:
             if self._manual_safe_until is None:
                 end = "until it is switched off"
+                short_end = "until switched off"
             else:
-                end = f"until {dt_util.as_local(self._manual_safe_until):%Y-%m-%d %H:%M}"
-            return True, f"SAFE: MANUAL OVERRIDE {end} (the rules are ignored)"
+                end = short_end = f"until {dt_util.as_local(self._manual_safe_until):%Y-%m-%d %H:%M}"
+            return (
+                True,
+                f"SAFE: MANUAL OVERRIDE {end} (the rules are ignored)",
+                f"SAFE: Manual Safe {short_end}",
+            )
 
         # Check boot guard
         if self._groups and not all(g.boot_guard_complete for g in self._groups):
             pending = [g.name for g in self._groups if not g.boot_guard_complete]
-            return False, (
-                f"UNSAFE: System Initializing — "
-                f"waiting for groups: {', '.join(pending)}"
+            return (
+                False,
+                f"UNSAFE: System Initializing — waiting for groups: {', '.join(pending)}",
+                "UNSAFE: Initializing",
             )
 
         # Check if no groups configured — fail-safe: UNSAFE by default
         if not self._groups:
-            return False, "UNSAFE: No safety groups configured"
+            return False, "UNSAFE: No safety groups configured", "UNSAFE: No groups"
 
         # Normal evaluation. Force Safe only bypassed the settle timers of groups
         # that are not actually unsafe (see trigger_force_safe), so group state
@@ -844,9 +870,17 @@ class SafetyCoordinator:
 
         if not unsafe_groups:
             if self._force_safe:
-                return True, "SAFE: Force Safe override active (timers bypassed)"
-            return True, "SAFE: All groups report safe"
-        return False, "UNSAFE: " + " | ".join(g.description for g in unsafe_groups)
+                return True, "SAFE: Force Safe override active (timers bypassed)", "SAFE"
+            return True, "SAFE: All groups report safe", "SAFE"
+        names = [g.name for g in unsafe_groups]
+        shown = ", ".join(names[:SUMMARY_GROUPS_SHOWN])
+        if len(names) > SUMMARY_GROUPS_SHOWN:
+            shown += f" +{len(names) - SUMMARY_GROUPS_SHOWN}"
+        return (
+            False,
+            "UNSAFE: " + " | ".join(g.description for g in unsafe_groups),
+            f"UNSAFE: {shown}",
+        )
 
     def diagnostics(self) -> dict[str, Any]:
         """The state of the monitor, its groups and rules, for the diagnostics download."""

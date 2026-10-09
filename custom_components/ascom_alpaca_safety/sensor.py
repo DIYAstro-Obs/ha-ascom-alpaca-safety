@@ -68,13 +68,16 @@ class SafetyReasonSensor(SensorEntity):
 
     @property
     def native_value(self) -> str:
-        """The description of the master state (cut to 255 characters)."""
-        return state_text(self._coordinator.description)
+        """The master state in a few words (``UNSAFE: obs roof``): a card cuts a long state."""
+        return state_text(self._coordinator.summary)
 
     @property
-    def extra_state_attributes(self) -> dict[str, str]:
-        """The complete text: a state is limited to 255 characters, an attribute is not."""
-        return {"description": self._coordinator.description}
+    def extra_state_attributes(self) -> dict[str, str | list[str]]:
+        """The complete text (a state is limited to 255 characters, an attribute is not) and the unsafe groups."""
+        return {
+            "description": self._coordinator.description,
+            "unsafe_groups": self._coordinator.unsafe_group_names,
+        }
 
     async def async_added_to_hass(self) -> None:
         self._remove_listener = self._coordinator.async_add_listener(
